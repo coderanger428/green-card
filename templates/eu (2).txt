@@ -1,0 +1,9 @@
+Subject: Collaboration idea – technical ownership + client communication
+Hi [Name],
+I came across your profile on Dev.to and reviewed your GitHub work. Your background stood out.
+I’m a senior full-stack developer focused on system design, architecture, and delivering projects beyond the prototype stage. From what I’ve observed, you communicate effectively with clients and product managers while maintaining a strong technical understanding.
+I’d like to explore a potential collaboration in which I take primary ownership of the engineering work (system design, architecture, implementation, and delivery), while you lead the client- and stakeholder-facing responsibilities: communication, progress reporting, relationship management, and priority shaping. All details around roles, credit, and compensation would be discussed transparently upfront.
+If this direction is of interest, I would welcome a brief call to discuss fit and expectations.
+Best regards,
+
+[Your Name]

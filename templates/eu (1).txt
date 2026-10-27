@@ -1,0 +1,9 @@
+Subject: Quick idea after checking out your work
+Hi [Name],
+Came across your Dev.to profile and spent a bit of time on your GitHub — solid stuff.
+I’m a senior full-stack dev who focuses on system design, architecture, and getting projects past the prototype stage. From what I’ve seen, you communicate clearly and work well with clients and product people while still understanding the technical side.
+Thought it might be interesting to team up: I handle the engineering (design, architecture, building, delivery) and you take the client-facing side — communication, updates, relationships, and helping set priorities. We’d figure out responsibilities, credit, and how we split everything openly from the start.
+If that sounds even remotely interesting, happy to hop on a short call and see if it clicks. No pressure either way.
+Cheers,
+
+[Your Name]

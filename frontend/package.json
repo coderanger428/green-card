@@ -1,0 +1,24 @@
+{
+  "name": "devto-scraper-dashboard",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hot-toast": "^2.6.0",
+    "react-modal": "^3.16.3",
+    "react-paginate": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/react-modal": "^3.16.3",
+    "@types/react-paginate": "^7.1.4",
+    "@vitejs/plugin-react": "^4.4.0",
+    "vite": "^5.4.0"
+  }
+}

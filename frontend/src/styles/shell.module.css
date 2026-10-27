@@ -1,0 +1,183 @@
+.app-shell {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 24px;
+  padding-top: calc(var(--topbar-height) + 24px);
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  height: var(--topbar-height);
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.topbar-inner {
+  max-width: 1600px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.topbar-brand-mark {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.topbar-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.nav-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+
+.nav-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #64748b;
+  padding: 0 16px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.nav-button svg {
+  flex-shrink: 0;
+}
+
+.nav-button:hover {
+  background: transparent;
+  color: #0f172a;
+}
+
+.nav-button.active {
+  background: transparent;
+  color: #0f172a;
+  border-bottom-color: #0f172a;
+  box-shadow: none;
+}
+
+.nav-badge {
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.nav-button.active .nav-badge {
+  background: none;
+  color: inherit;
+}
+
+.nav-button:focus-visible,
+.topbar-brand:focus-visible {
+  outline: 1px solid #94a3b8;
+  outline-offset: -1px;
+}
+
+@media (max-width: 720px) {
+  .topbar-title {
+    display: none;
+  }
+
+  .nav-button {
+    padding: 0 12px;
+  }
+
+  .nav-button > span:not(.nav-badge) {
+    display: none;
+  }
+}
+
+.content {
+  display: grid;
+  gap: 18px;
+}
+
+.go-top-bubble {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: none;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 1.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 18px 34px rgba(37, 99, 235, 0.22);
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease;
+  z-index: 20;
+}
+
+.go-top-bubble:hover {
+  transform: translateY(-2px);
+  background: #1d4ed8;
+}
+
+.go-top-bubble:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.5);
+  outline-offset: 4px;
+}

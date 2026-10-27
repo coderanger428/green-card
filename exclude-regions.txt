@@ -1,0 +1,95 @@
+# Countries the scraper will not save. One slug per line.
+# Add names as you go (india, germany, …). Lines starting with # are ignored.
+#
+# Named regions expand to their members: eu, emea, apac, latam.
+# Do not list noloc — that bucket is unmatched location, not a country.
+#
+# Seeded from countries that had fewer than 10 users when this file was created.
+# New tiny countries are NOT auto-added; they can still grow. Put them here
+# yourself if you want them gone, or click − next to a country in the Users
+# sidebar (that also deletes existing users for that country).
+
+south_korea
+
+afghanistan
+albania
+andorra
+bahrain
+benin
+bhutan
+botswana
+burundi
+cape_verde
+congo
+eswatini
+gabon
+georgia_country
+guernsey
+iceland
+ivory_coast
+jamaica
+jordan
+kosovo
+kuwait
+kyrgyzstan
+laos
+libya
+luxembourg
+malawi
+maldives
+malta
+mauritania
+mauritius
+mongolia
+montenegro
+mozambique
+namibia
+north_macedonia
+oman
+qatar
+sierra_leone
+sudan
+syria
+trinidad_and_tobago
+turkmenistan
+senegal
+puerto_rico
+palestine
+cambodia
+nigeria
+indonesia
+bangladesh
+russia
+kenya
+ghana
+cameroon
+uganda
+rwanda
+tanzania
+angola
+zimbabwe
+zambia
+india
+pakistan
+macau
+honduras
+cuba
+lebanon
+panama
+iraq
+el_salvador
+myanmar
+bosnia
+guatemala
+belarus
+kazakhstan
+madagascar
+uzbekistan
+dominican_republic
+tunisia
+nepal
+israel
+sri_lanka
+iran
+ethiopia
+nicaragua

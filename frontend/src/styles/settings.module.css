@@ -1,0 +1,88 @@
+.accounts-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.accounts-table th,
+.accounts-table td {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  text-align: left;
+}
+
+.accounts-table th {
+  background: #e2e8f0;
+  font-weight: 700;
+}
+
+.form-card {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.form-card label {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.token-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 10px 0 0;
+}
+
+.token-mask {
+  font-variant-numeric: tabular-nums;
+}
+
+.token-expired,
+.token-invalid {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.token-soon {
+  color: #ea580c;
+  font-weight: 700;
+}
+
+.token-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+}
+
+.token-refresh:hover {
+  background: #f1f5f9;
+}
+
+.token-renew {
+  margin-left: auto;
+}
+
+.form-card input[type='email'],
+.form-card input[type='password'],
+.form-card input[type='number'] {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid #c4d0dc;
+  border-radius: 12px;
+  background: #f9fbff;
+  color: #1f2937;
+  font: inherit;
+}
+

@@ -1,0 +1,179 @@
+.copy-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.copy-row-body {
+  align-items: flex-start;
+}
+
+.copy-row input,
+.copy-row textarea,
+.copy-value {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  margin-top: 0;
+}
+
+.copy-value {
+  padding: 12px 14px;
+  border: 1px solid #c4d0dc;
+  border-radius: 12px;
+  background: #f9fbff;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  flex: none;
+}
+
+.social-copy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.mail-modal-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.social-modal-platform,
+.social-copy-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #111827;
+}
+
+.social-kind-mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.social-kind-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: #111827;
+  font-weight: 650;
+}
+
+.social-copy-item {
+  display: grid;
+  grid-template-columns: auto 28px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.social-copy-item code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-action-sent {
+  background: #15803d;
+  color: #ffffff;
+}
+
+.contact-action-failed {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.mail-modal label {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.mail-modal input[type='email'],
+.mail-modal input[type='password'],
+.mail-modal input[type='text'],
+.mail-modal textarea,
+.mail-modal select {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid #c4d0dc;
+  border-radius: 12px;
+  background: #f9fbff;
+  color: #1f2937;
+  font: inherit;
+}
+
+.mail-modal .copy-row input,
+.mail-modal .copy-row textarea {
+  width: auto;
+  margin-top: 0;
+}
+
+.mail-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.mail-modal {
+  width: min(480px, 100%);
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid #dde3eb;
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
+  padding: 22px;
+  outline: none;
+}
+
+.mail-modal.token-modal {
+  width: min(420px, 100%);
+}
+
+.mail-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.template-modal {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.contact-modal {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.mail-modal textarea {
+  min-height: 220px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.45;
+}

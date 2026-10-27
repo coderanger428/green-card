@@ -1,0 +1,14 @@
+Subject: Potential collaboration structure
+Hi [Name],
+I found your profile on Dev.to and looked through your GitHub.
+I’m a senior full-stack developer specializing in system design, architecture, and taking projects from prototype to production. You appear strong at clear communication with clients and product stakeholders while understanding the technical details.
+Proposed split:
+
+Me: engineering ownership (design, architecture, implementation, delivery)
+You: client- and stakeholder-facing work (communication, progress updates, relationship management, priority shaping)
+
+Responsibilities, credit, and any compensation arrangement would be defined openly at the start.
+If this structure interests you, I’m available for a short call to walk through the details.
+Best,
+
+[Your Name]

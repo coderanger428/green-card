@@ -1,0 +1,8 @@
+# Python deps for scraper + dashboard (API serves frontend/dist).
+# Install: python -m pip install -r requirements.txt
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+requests==2.34.2
+pydantic[email]==2.13.4
+email-validator==2.3.0

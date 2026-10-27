@@ -1,0 +1,57 @@
+.scrape-control-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scrape-control-button.is-resume {
+  background: #16a34a;
+}
+
+.scrape-control-button.is-resume:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.scrape-control-button.is-pause {
+  background: #d97706;
+}
+
+.scrape-control-button.is-pause:hover:not(:disabled) {
+  background: #b45309;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.scraper-cap-form {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: #f8fafc;
+}
+
+.scraper-cap-input {
+  display: block;
+  margin: 8px 0 4px;
+}
+
+.scraper-cap-input input[type='number'] {
+  width: min(220px, 100%);
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid #c4d0dc;
+  border-radius: 12px;
+  background: #f9fbff;
+  color: #1f2937;
+  font: inherit;
+}
+
+.scraper-cap-input input[type='number']:disabled {
+  opacity: 0.55;
+  background: #eef2f7;
+}
