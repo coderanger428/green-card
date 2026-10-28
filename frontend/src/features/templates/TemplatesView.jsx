@@ -1,13 +1,21 @@
 import Modal from 'react-modal';
 import { RegionSuggest } from './RegionSuggest';
 import { useDashboard } from '../../app/DashboardContext';
-import { formatCountryName } from '../../lib/format';
+import { formatCountryName, formatDateOnly } from '../../lib/format';
 import { cls } from '../../styles/cls';
 import layout from '../../styles/layout.module.css';
 import ui from '../../styles/ui.module.css';
 import pool from '../../styles/pool.module.css';
 import modal from '../../styles/modal.module.css';
 import templates from '../../styles/templates.module.css';
+
+function templateUpdatedOn(value) {
+  const parsed = value ? new Date(value) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) {
+    return formatDateOnly(value);
+  }
+  return formatDateOnly(new Date().toISOString());
+}
 
 export function TemplatesView() {
   const {
@@ -97,7 +105,7 @@ export function TemplatesView() {
                         onClick={() => setSelectedTemplateRegion(item.slug)}
                       >
                         <div className={cls(layout, "country-list-top")}>
-                          <span className={cls(layout, "country-list-name")}>{item.label}</span>
+                          <span className={cls(layout, "country-list-name")}>{formatCountryName(item.slug)}</span>
                           <span className={cls(layout, "country-list-count")}>{item.templates || 0}</span>
                         </div>
                       </button>
@@ -119,7 +127,7 @@ export function TemplatesView() {
                         onClick={() => setSelectedTemplateRegion(item.slug)}
                       >
                         <div className={cls(layout, "country-list-top")}>
-                          <span className={cls(layout, "country-list-name")}>{item.label}</span>
+                          <span className={cls(layout, "country-list-name")}>{formatCountryName(item.slug)}</span>
                           <span className={cls(layout, "country-list-count")}>{item.templates || 0}</span>
                         </div>
                       </button>
@@ -161,16 +169,16 @@ export function TemplatesView() {
                         <tr>
                           <th>Region</th>
                           <th>Subject</th>
-                          <th>File</th>
+                          <th>Updated</th>
                           <th />
                         </tr>
                       </thead>
                       <tbody>
                         {visibleTemplates.map((item) => (
                           <tr key={item.filename}>
-                            <td>{item.region_label || formatCountryName(item.region)}</td>
+                            <td>{formatCountryName(item.region)}</td>
                             <td>{item.subject || '-'}</td>
-                            <td className={cls(ui, "small-text")}>{item.filename}</td>
+                            <td>{templateUpdatedOn(item.updated_at)}</td>
                             <td>
                               <div className={cls(ui, "form-actions-row")}>
                                 <button

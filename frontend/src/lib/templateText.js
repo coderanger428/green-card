@@ -1,3 +1,5 @@
+import { formatCountryName } from './format';
+
 const BRACE_CONTENT = /\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}|（[^（）]*）|【[^【】]*】/g;
 
 function capWord(word) {
@@ -26,6 +28,31 @@ export function renderTemplateText(text, name, yourName, link) {
   rendered = rendered.replace(/\[your name\]/gi, String(yourName || '').trim());
   rendered = rendered.replace(/\[link\]/gi, link || '');
   return rendered;
+}
+
+const IDENTIFIER_WIDTH = 8;
+const SUBJECT_WIDTH = 28;
+
+function padEnd(value, width) {
+  const text = String(value || '');
+  if (text.length >= width) return text;
+  return text + ' '.repeat(width - text.length);
+}
+
+export function abbreviateSubject(subject, width = SUBJECT_WIDTH) {
+  const text = String(subject || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= width) return text;
+  const keep = Math.max(1, width - 3);
+  return `${text.slice(0, keep).trimEnd()}...`;
+}
+
+export function templatePickerLabel(item) {
+  const country = formatCountryName(item?.region || '') || 'Template';
+  const match = String(item?.filename || '').match(/\((\d+)\)/);
+  const head = padEnd(match ? `${country}(${match[1]})` : country, IDENTIFIER_WIDTH);
+  const subject = abbreviateSubject(item?.subject);
+  if (!subject) return head.trimEnd();
+  return `${head}:${subject}`;
 }
 
 export function senderDisplayName(email, accounts) {

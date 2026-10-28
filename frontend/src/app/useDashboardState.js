@@ -6,6 +6,39 @@ import { SCRAPERS } from '../lib/source';
 import { SOCIAL_ACCOUNT_FILTERS, emptySocialFilters, socialProviderLabel } from '../lib/social';
 import { renderTemplateText, senderDisplayName } from '../lib/templateText';
 
+const LAST_SENDER_KEY = 'last-sender-email';
+
+function readLastSender() {
+  try {
+    return String(localStorage.getItem(LAST_SENDER_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function rememberSender(email) {
+  const value = String(email || '').trim();
+  if (!value) return '';
+  try {
+    localStorage.setItem(LAST_SENDER_KEY, value);
+  } catch {
+    // The choice still lasts until this page is closed.
+  }
+  return value;
+}
+
+function chooseSender(senders, preferred, fallback) {
+  const list = Array.isArray(senders) ? senders : [];
+  const wanted = String(preferred || '').trim().toLowerCase();
+  const match = list.find((email) => String(email || '').trim().toLowerCase() === wanted);
+  if (match) return match;
+  const next = String(fallback || '').trim();
+  if (next && list.some((email) => String(email || '').trim().toLowerCase() === next.toLowerCase())) {
+    return list.find((email) => String(email || '').trim().toLowerCase() === next.toLowerCase());
+  }
+  return list[0] || '';
+}
+
 export function useDashboardState() {
   const [view, setView] = useState('pool');
   const [contactModal, setContactModal] = useState(null);
@@ -20,6 +53,7 @@ export function useDashboardState() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const mailPreviewSeq = useRef(0);
+  const lastSenderRef = useRef(readLastSender());
   const [mailAccounts, setMailAccounts] = useState(null);
   const [mailEmail, setMailEmail] = useState('');
   const [mailSenderName, setMailSenderName] = useState('');
@@ -27,7 +61,7 @@ export function useDashboardState() {
   const [mailModalOpen, setMailModalOpen] = useState(false);
   const [scraperInfo, setScraperInfo] = useState(null);
   const [selectedScraper, setSelectedScraper] = useState(SCRAPERS[0].id);
-  const [capMode, setCapMode] = useState('auto');
+  const [capEnabled, setCapEnabled] = useState(true);
   const [capInput, setCapInput] = useState('');
   const [capDirty, setCapDirty] = useState(false);
   const [displayNameDrafts, setDisplayNameDrafts] = useState({});
@@ -59,15 +93,15 @@ export function useDashboardState() {
   const applyScraperInfo = (data) => {
     setScraperInfo(data);
     if (!capDirty) {
-      const mode = data?.cap_mode === 'manual' ? 'manual' : 'auto';
-      setCapMode(mode);
-      setCapInput(
-        String(
-          mode === 'manual'
-            ? data?.daily_limit_override ?? data?.daily_limit ?? ''
-            : data?.auto_daily_limit ?? data?.daily_limit ?? ''
-        )
-      );
+      const enabled = typeof data?.cap_enabled === 'boolean' ? data.cap_enabled : true;
+      const cap =
+        data?.daily_cap ??
+        data?.daily_limit_override ??
+        data?.auto_daily_limit ??
+        data?.daily_limit ??
+        '';
+      setCapEnabled(enabled);
+      setCapInput(String(cap));
     }
   };
 
@@ -513,6 +547,7 @@ export function useDashboardState() {
   const openEmailContact = (user) => {
     const seq = mailPreviewSeq.current + 1;
     mailPreviewSeq.current = seq;
+    const preferred = lastSenderRef.current || readLastSender();
     setContactModal({
       channel: 'email',
       user,
@@ -521,11 +556,16 @@ export function useDashboardState() {
       body: '',
       filename: '',
       templates: [],
-      senders: [],
-      sender: '',
+      senders: preferred ? [preferred] : [],
+      sender: preferred,
     });
+    const previewParams = new URLSearchParams();
+    if (preferred) previewParams.set('sender', preferred);
+    const previewQuery = previewParams.toString();
     Promise.all([
-      fetch(`/api/users/${user.id}/mail-preview`).then(async (res) => {
+      fetch(
+        `/api/users/${user.id}/mail-preview${previewQuery ? `?${previewQuery}` : ''}`
+      ).then(async (res) => {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
           const detail = body.detail;
@@ -554,17 +594,34 @@ export function useDashboardState() {
         const previewTemplates = data.templates || [];
         const templates = listed.length ? listed : previewTemplates;
         const accounts = accountsData?.accounts || mailAccounts?.accounts || [];
+        const senders = data.senders || [];
+        const sender = chooseSender(senders, preferred, data.sender);
+        if (sender) {
+          lastSenderRef.current = sender;
+          rememberSender(sender);
+        }
+        const filename = data.filename || templates[0]?.filename || '';
+        const chosen = templates.find((item) => item.filename === filename);
+        let subject = data.subject || '';
+        let body = data.body || '';
+        if (chosen && chosen.subject != null) {
+          const person = user.display_name || user.name || '';
+          const yourName = senderDisplayName(sender, accounts);
+          const link = user.link || '';
+          subject = renderTemplateText(chosen.subject, person, yourName, link);
+          body = renderTemplateText(chosen.body || '', person, yourName, link);
+        }
         setContactModal((current) =>
           current && current.user.id === user.id
             ? {
                 ...current,
                 loading: false,
-                subject: data.subject || '',
-                body: data.body || '',
-                filename: data.filename || templates[0]?.filename || '',
+                subject,
+                body,
+                filename,
                 templates,
-                senders: data.senders || [],
-                sender: data.sender || (data.senders || [])[0] || '',
+                senders,
+                sender,
                 senderAccounts: accounts,
               }
             : current
@@ -586,6 +643,10 @@ export function useDashboardState() {
     if (!currentModal || currentModal.channel !== 'email' || !currentModal.user?.id) return;
     const nextSender = sender ?? currentModal.sender ?? '';
     const nextTemplate = template ?? currentModal.filename ?? '';
+    if (nextSender) {
+      lastSenderRef.current = nextSender;
+      rememberSender(nextSender);
+    }
     const chosen = (currentModal.templates || []).find((item) => item.filename === nextTemplate);
     if (chosen && chosen.subject != null) {
       const person = currentModal.user.display_name || currentModal.user.name || '';
@@ -632,7 +693,7 @@ export function useDashboardState() {
                 body: data.body || '',
                 filename: data.filename || nextTemplate,
                 templates: data.templates || current.templates || [],
-                sender: data.sender || nextSender,
+                sender: chooseSender(data.senders || current.senders, nextSender, data.sender),
               }
             : current
         );
@@ -837,10 +898,10 @@ export function useDashboardState() {
   const handleSaveScrapeCap = () => {
     setLoading(true);
     setError('');
-    const payload =
-      capMode === 'manual'
-        ? { cap_mode: 'manual', daily_cap: Number(capInput) }
-        : { cap_mode: 'auto' };
+    const payload = {
+      enabled: capEnabled,
+      daily_cap: Number(capInput),
+    };
     fetch('/api/scraper/cap', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -856,23 +917,16 @@ export function useDashboardState() {
       })
       .then((data) => {
         toast.success(
-          capMode === 'manual'
+          capEnabled
             ? `Daily scrape cap set to ${payload.daily_cap}.`
-            : 'Daily scrape cap set to auto (mail-cap ratio).'
+            : 'Daily scrape cap turned off.'
         );
         setCapDirty(false);
         if (data.scraper) {
           const next = data.scraper;
           setScraperInfo(next);
-          const mode = next.cap_mode === 'manual' ? 'manual' : 'auto';
-          setCapMode(mode);
-          setCapInput(
-            String(
-              mode === 'manual'
-                ? next.daily_limit_override ?? next.daily_limit ?? ''
-                : next.auto_daily_limit ?? next.daily_limit ?? ''
-            )
-          );
+          setCapEnabled(typeof next.cap_enabled === 'boolean' ? next.cap_enabled : capEnabled);
+          setCapInput(String(next.daily_cap ?? next.daily_limit ?? payload.daily_cap));
         } else {
           loadScraperInfo();
         }
@@ -1011,7 +1065,8 @@ export function useDashboardState() {
     if (!item?.filename) {
       return;
     }
-    if (!window.confirm(`Delete ${item.filename}?`)) {
+    const label = item.subject ? `"${item.subject}"` : 'this template';
+    if (!window.confirm(`Delete ${label}?`)) {
       return;
     }
     setLoading(true);
@@ -1028,7 +1083,7 @@ export function useDashboardState() {
         return data;
       })
       .then(() => {
-        toast.success(`Deleted ${item.filename}.`);
+        toast.success('Template deleted.');
         if (templateFilename === item.filename) {
           closeTemplateModal();
         }
@@ -1079,8 +1134,8 @@ export function useDashboardState() {
     setScraperInfo,
     selectedScraper,
     setSelectedScraper,
-    capMode,
-    setCapMode,
+    capEnabled,
+    setCapEnabled,
     capInput,
     setCapInput,
     capDirty,

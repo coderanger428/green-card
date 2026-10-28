@@ -16,7 +16,7 @@ flowchart TB
   enrich --> db
 
   dashboard --> db
-  dashboard --> mail["mail/ + templates/"]
+  dashboard --> mail["mail/"]
   dashboard --> ui["frontend/dist"]
 
   ui --> shell["Shell"]
@@ -31,16 +31,16 @@ flowchart TB
 | --- | --- |
 | `launch.py` | Starts `scrapers.devto` and uvicorn. Does not start a mail sender. |
 | `scrapers/devto/` | Walks Dev.to user ids, normalizes location, stores a GitHub profile when the token allows it. |
-| `core/db.py` | Users, contact status, sender addresses, scrape position, and the GitHub token. |
+| `core/db.py` | Users, contact status, sender addresses, mail templates, scrape position, and the GitHub token. |
 | `core/github_enrich.py` | Token lookup, profile fields, and which hosts are social links. |
 | `core/locations.py` | Place formatting and excluded countries. |
 | `server/dashboard.py` | HTTP API and the built UI. |
-| `mail/` | Renders `[Name]`, `[Your Name]`, and `[Link]` from `templates/*.txt`. |
+| `mail/` | Renders `[Name]`, `[Your Name]`, and `[Link]` from the templates stored in `app.db`. |
 | `frontend/src/app/` | Dashboard state and HTTP calls. |
 | `frontend/src/features/` | Pool, Scraper, Templates, and Settings. The email and social modals live under Pool. |
 | `exclude-regions.txt` | Country slugs the scraper will not save. |
 
-The GitHub token and each sender’s name are rows in `app.db`, edited on Settings. `app.db` stays on disk and is not part of the git history.
+The GitHub token, each sender’s name, and every mail template are rows in `app.db`. `app.db` stays on disk and is not part of the git history. Copy that file to keep users, senders, and templates together.
 
 ## Initial setup
 
@@ -96,7 +96,7 @@ Open **http://127.0.0.1:8007**
 | Edit the React UI with live reload | `start-watch.bat` or `start.bat watch` | `./start-watch.sh` | http://127.0.0.1:5173 |
 | Stop everything | Ctrl+C, or `stop.bat` | Ctrl+C, or `./stop.sh` | — |
 
-After code or template changes, run `start` again. It shuts the old processes down first.
+After code changes, run `start` again. It shuts the old processes down first. Template edits are saved in `app.db` and do not need a restart.
 
 ### 6. Optional: start 5 minutes after sign-in
 
@@ -119,20 +119,17 @@ Account age still sets the scrape cap. Tokyo calendar age raises each account’
 
 ## Email templates
 
-Plain-text files in `templates/`. Manage them on the **Templates** page, or edit the files directly.
+Templates are rows in `app.db`. Manage them on the **Templates** page. Restoring that database on a new install brings the templates back with the users and sender addresses. A new database starts empty; add templates on that page.
 
-- Filename: `{slug} (n).txt` — for example `apac (1).txt`, `japan (1).txt`, `usa (1).txt`
-- Line 1: `Subject: ...`
-- Rest: body
+- Name: `{slug} (n).txt` — for example `apac (1).txt`, `japan (1).txt`, `usa (1).txt`
+- Subject, then body
 - Placeholders: `[Name]` (display name; missing → `there`), `[Your Name]` (the name saved for the selected sender), `[Link]`
 
-**Named regions** (one file covers many countries): `eu`, `emea`, `apac`, `latam`, `etc` (Other).
+**Named regions** (one template covers many countries): `eu`, `emea`, `apac`, `latam`, `etc` (Other).
 
 **Countries** use the country name: `japan`, `usa`, `india`, `germany`. Typing `ja` / `jp` or `us` is treated as `japan` / `usa`.
 
-The mail modal picks the first match that has files: country file → named region → Other. Add APAC once and Asian/Pacific countries use it unless a country file exists.
-
-The dashboard reloads templates from disk after you save in the UI.
+The mail modal picks the first match: country template → named region → Other. Add APAC once and Asian/Pacific countries use it unless a country template exists.
 
 ## Exclude countries
 
@@ -153,15 +150,6 @@ Mail is sent by hand. The dashboard does not queue or send messages.
 
 ### Scrape throttle
 
-The scraper stays running but **idles** when today’s **located** saves (country ≠ `noloc`) reach the daily scrape cap. Default cap:
+The scraper stays running but **idles** when today’s **located** saves (country ≠ `noloc`) reach the daily scrape cap. On the **Scraper** page, set that number and check **Apply daily cap**. Clear the checkbox to keep scraping with no daily limit. Saves tagged `noloc` still happen and do not count toward the budget.
 
-`floor(1.5 × sum of active Gmail daily caps)`
-
-Set an absolute cap (or pause scraping) from the **Scraper** page. Saves tagged `noloc` still happen but **do not** count toward the budget. Override the auto ratio with `SCRAPE_MAIL_CAP_RATIO` (default `1.5`) when cap mode is Auto.
-
-### Optional env knobs
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `MAIL_DAILY_LIMIT` | `20` | Fallback daily cap if no account caps apply |
-| `SCRAPE_MAIL_CAP_RATIO` | `1.5` | Auto scrape cap = ratio × active mail caps (dashboard can override with a manual daily cap) |
+The first startup copies the previous mail-based budget into that number once. Later sender changes do not move the scrape cap.

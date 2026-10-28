@@ -37,16 +37,7 @@ from core.github_enrich import (
     mask_token,
     token_expires_soon,
 )
-from mail.send import (
-    TEMPLATES_DIR,
-    create_template,
-    delete_template,
-    list_templates,
-    load_template_pool,
-    pick_message,
-    templates_dir_mtime,
-    update_template,
-)
+from mail.send import pick_message
 from mail.regions import decorate_template, suggestion_catalog
 
 RESULT_DIR = Path(os.environ.get("RESULT_DIR", str(app_db.PROJECT_ROOT)))
@@ -69,10 +60,6 @@ def load_dotenv(path: str = ".env") -> None:
 
 
 load_dotenv()
-
-
-def daily_limit() -> int:
-    return max(1, int(os.environ.get("MAIL_DAILY_LIMIT", "20")))
 
 
 def local_day_prefix() -> str:
@@ -117,8 +104,8 @@ class PauseBody(BaseModel):
 
 
 class ScrapeCapBody(BaseModel):
-    cap_mode: Literal["auto", "manual"] = "auto"
-    daily_cap: int | None = Field(default=None, ge=1)
+    enabled: bool = True
+    daily_cap: int = Field(..., ge=1)
 
 
 class MailAccountBody(BaseModel):
@@ -426,12 +413,11 @@ def api_mail_preview(
             if item["email"] == chosen:
                 stored_name = str(item.get("sender_name") or "")
                 break
+        pool = app_db.list_mail_templates(conn)
     if row is None:
         raise HTTPException(404, "User not found")
-    try:
-        pool = load_template_pool(TEMPLATES_DIR)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+    if not pool:
+        raise HTTPException(404, "No templates found")
     filename, subject, body = pick_message(
         pool,
         row["country"] or "",
@@ -526,11 +512,7 @@ def api_user_suppress(user_id: int) -> dict[str, Any]:
 
 
 def _scraper_payload(conn) -> dict[str, Any]:
-    return app_db.scrape_control_snapshot(
-        conn,
-        ratio=app_db.scrape_mail_cap_ratio(),
-        fallback_mail_cap=daily_limit(),
-    )
+    return app_db.scrape_control_snapshot(conn)
 
 
 @app.get("/api/scraper")
@@ -548,13 +530,8 @@ def api_scraper_pause(body: PauseBody) -> dict[str, Any]:
 
 @app.put("/api/scraper/cap")
 def api_scraper_cap(body: ScrapeCapBody) -> dict[str, Any]:
-    if body.cap_mode == "manual" and body.daily_cap is None:
-        raise HTTPException(400, "daily_cap is required when cap_mode is manual")
     with app_db.get_conn(RESULT_DIR) as conn:
-        if body.cap_mode == "auto":
-            app_db.set_scrape_daily_cap_override(conn, None)
-        else:
-            app_db.set_scrape_daily_cap_override(conn, int(body.daily_cap))
+        app_db.set_scrape_cap(conn, enabled=body.enabled, cap=int(body.daily_cap))
         return {"ok": True, "scraper": _scraper_payload(conn)}
 
 
@@ -704,25 +681,26 @@ def _template_http_error(exc: Exception) -> HTTPException:
 
 @app.get("/api/template-regions")
 def api_template_regions() -> dict[str, Any]:
-    templates = list_templates(TEMPLATES_DIR)
     with app_db.get_conn(RESULT_DIR) as conn:
+        templates = app_db.list_mail_templates(conn)
         user_counts = app_db.country_counts(conn)
     return suggestion_catalog(user_counts=user_counts, templates=templates)
 
 
 @app.get("/api/templates")
 def api_templates() -> dict[str, Any]:
-    return {
-        "templates": [
-            decorate_template(item) for item in list_templates(TEMPLATES_DIR)
-        ]
-    }
+    with app_db.get_conn(RESULT_DIR) as conn:
+        templates = app_db.list_mail_templates(conn)
+    return {"templates": [decorate_template(item) for item in templates]}
 
 
 @app.post("/api/templates")
 def api_template_create(body: TemplateBody) -> dict[str, Any]:
     try:
-        item = create_template(body.region, body.subject, body.body, TEMPLATES_DIR)
+        with app_db.get_conn(RESULT_DIR) as conn:
+            item = app_db.create_mail_template(
+                conn, body.region, body.subject, body.body
+            )
     except (ValueError, OSError) as exc:
         raise _template_http_error(exc) from exc
     return {"ok": True, "template": decorate_template(item)}
@@ -731,13 +709,14 @@ def api_template_create(body: TemplateBody) -> dict[str, Any]:
 @app.put("/api/templates/{filename}")
 def api_template_update(filename: str, body: TemplateBody) -> dict[str, Any]:
     try:
-        item = update_template(
-            filename,
-            region=body.region,
-            subject=body.subject,
-            body=body.body,
-            templates_dir=TEMPLATES_DIR,
-        )
+        with app_db.get_conn(RESULT_DIR) as conn:
+            item = app_db.update_mail_template(
+                conn,
+                filename,
+                region=body.region,
+                subject=body.subject,
+                body=body.body,
+            )
     except (ValueError, FileNotFoundError, OSError) as exc:
         raise _template_http_error(exc) from exc
     return {"ok": True, "template": decorate_template(item)}
@@ -746,7 +725,8 @@ def api_template_update(filename: str, body: TemplateBody) -> dict[str, Any]:
 @app.delete("/api/templates/{filename}")
 def api_template_delete(filename: str) -> dict[str, Any]:
     try:
-        delete_template(filename, TEMPLATES_DIR)
+        with app_db.get_conn(RESULT_DIR) as conn:
+            app_db.delete_mail_template(conn, filename)
     except (ValueError, FileNotFoundError, OSError) as exc:
         raise _template_http_error(exc) from exc
     return {"ok": True, "deleted": filename}

@@ -29,8 +29,9 @@ export const RegionSuggest = ({
     ...custom.map((item) => ({ ...item, section: 'Custom' })),
     ...countries.map((item) => ({ ...item, section: 'Countries' })),
   ];
+  const displayName = (item) => formatCountryName(item?.slug) || item?.label || '';
   const selected = options.find((item) => item.slug === value);
-  const matchText = editing ? query : selected?.label || value || '';
+  const matchText = editing ? query : displayName(selected) || value || '';
   const needle = slugifyRegionQuery(editing ? query : matchText);
   const labelNeedle = (editing ? query : matchText).trim().toLowerCase();
 
@@ -73,7 +74,7 @@ export const RegionSuggest = ({
     <div className={cls(templates, "region-suggest")}>
       <input
         type="text"
-        value={editing ? query : selected?.label || value || ''}
+        value={editing ? query : displayName(selected) || value || ''}
         disabled={disabled}
         placeholder="Search EU, APAC, LATAM, or a country"
         autoComplete="off"
@@ -81,7 +82,7 @@ export const RegionSuggest = ({
         aria-expanded={open}
         onFocus={() => {
           setEditing(true);
-          setQuery(selected?.label || value || '');
+          setQuery(displayName(selected) || value || '');
           setOpen(true);
         }}
         onChange={(event) => {
@@ -157,7 +158,7 @@ export const RegionSuggest = ({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => pick(item.slug)}
                 >
-                  <span>{item.label}</span>
+                  <span>{displayName(item)}</span>
                 </button>
               ))}
             </div>
@@ -176,7 +177,7 @@ export const RegionSuggest = ({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => pick(item.slug)}
                 >
-                  <span>{item.label}</span>
+                  <span>{displayName(item)}</span>
                   {item.users ? (
                     <span className={cls(templates, "region-suggest-meta")}>{item.users} users</span>
                   ) : null}

@@ -3,8 +3,15 @@ import { cls } from '../styles/cls';
 import ui from '../styles/ui.module.css';
 
 export const DailyCapProgress = ({ sent, limit }) => {
-  const safeLimit = Math.max(0, Number(limit) || 0);
   const safeSent = Math.max(0, Number(sent) || 0);
+  if (limit == null) {
+    return (
+      <div className={cls(ui, 'daily-cap-block')}>
+        <div className={cls(ui, 'status-stat-value')}>{safeSent}</div>
+      </div>
+    );
+  }
+  const safeLimit = Math.max(0, Number(limit) || 0);
   const pct =
     safeLimit > 0 ? Math.min(100, Math.round((safeSent / safeLimit) * 1000) / 10) : 0;
   const tone = dailyCapTone(safeSent, safeLimit);

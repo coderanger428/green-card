@@ -235,5 +235,18 @@ class TemplateFileTests(unittest.TestCase):
             self.assertEqual(created["region"], "usa")
 
 
+class RegionLabelTests(unittest.TestCase):
+    def test_long_and_compound_names_use_short_codes(self):
+        self.assertEqual(regions.region_label("usa"), "USA")
+        self.assertEqual(regions.region_label("uk"), "UK")
+        self.assertEqual(regions.region_label("uae"), "UAE")
+        self.assertEqual(regions.region_label("new_zealand"), "NZ")
+        self.assertEqual(regions.region_label("czech_republic"), "CZ")
+        self.assertEqual(regions.region_label("hong_kong"), "HK")
+        self.assertEqual(regions.region_label("japan"), "Japan")
+        self.assertEqual(regions.region_label("etc"), "Other")
+        self.assertEqual(regions.region_label("eu"), "EU")
+
+
 if __name__ == "__main__":
     unittest.main()

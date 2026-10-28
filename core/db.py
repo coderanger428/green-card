@@ -104,6 +104,14 @@ CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS mail_templates (
+    filename TEXT PRIMARY KEY,
+    region TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -220,6 +228,8 @@ def init_db(result_dir: Path | None = None) -> Path:
         ensure_outcome_column(conn)
         ensure_sender_email_column(conn)
         ensure_mail_template_column(conn)
+        ensure_mail_templates(conn)
+        ensure_static_scrape_cap(conn)
         drop_unused_outcome_columns(conn)
         ensure_suppressed_column(conn)
         ensure_suppressed_locations(conn)
@@ -616,6 +626,197 @@ def ensure_mail_template_column(conn: sqlite3.Connection) -> None:
     conn.execute(
         "ALTER TABLE users ADD COLUMN mail_template TEXT NOT NULL DEFAULT ''"
     )
+
+
+def ensure_mail_templates(conn: sqlite3.Connection) -> None:
+    """Copy a leftover templates/*.txt directory into SQLite once, if one exists.
+
+    After that, the database is the copy that backup and reinstall restore.
+    """
+    if get_meta(conn, "mail_templates_seeded_v1") == "1":
+        return
+    count = conn.execute("SELECT COUNT(*) AS n FROM mail_templates").fetchone()["n"]
+    if int(count or 0) == 0:
+        from mail.send import TEMPLATES_DIR, list_templates
+
+        now = utc_now()
+        for item in list_templates(TEMPLATES_DIR):
+            conn.execute(
+                """
+                INSERT INTO mail_templates (filename, region, subject, body, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    item["filename"],
+                    item["region"],
+                    item["subject"],
+                    item["body"],
+                    now,
+                ),
+            )
+    set_meta(conn, "mail_templates_seeded_v1", "1")
+    ensure_mail_template_updated_at(conn)
+
+
+def ensure_mail_template_updated_at(conn: sqlite3.Connection) -> None:
+    """Templates with no saved edit time are dated today."""
+    conn.execute(
+        """
+        UPDATE mail_templates
+        SET updated_at = ?
+        WHERE TRIM(COALESCE(updated_at, '')) = ''
+        """,
+        (utc_now(),),
+    )
+
+
+def list_mail_templates(conn: sqlite3.Connection) -> list[dict[str, str]]:
+    ensure_mail_template_updated_at(conn)
+    rows = conn.execute(
+        """
+        SELECT filename, region, subject, body, updated_at
+        FROM mail_templates
+        ORDER BY filename
+        """
+    ).fetchall()
+    return [
+        {
+            "filename": row["filename"],
+            "region": row["region"],
+            "subject": row["subject"],
+            "body": row["body"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def _template_parts(region: str, subject: str, body: str) -> tuple[str, str, str]:
+    from mail.send import parse_template_text, serialize_template_text
+    from mail.regions import canonical_template_region
+
+    slug = canonical_template_region(region)
+    parsed = parse_template_text(
+        f"{slug} (1).txt",
+        serialize_template_text(subject, body),
+    )
+    return slug, parsed["subject"], parsed["body"]
+
+
+def create_mail_template(
+    conn: sqlite3.Connection,
+    region: str,
+    subject: str,
+    body: str,
+) -> dict[str, str]:
+    from mail.send import next_template_filename_for
+
+    slug, subject_text, body_text = _template_parts(region, subject, body)
+    names = [
+        row["filename"]
+        for row in conn.execute("SELECT filename FROM mail_templates").fetchall()
+    ]
+    filename = next_template_filename_for(slug, names)
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO mail_templates (filename, region, subject, body, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (filename, slug, subject_text, body_text, now),
+    )
+    return {
+        "filename": filename,
+        "region": slug,
+        "subject": subject_text,
+        "body": body_text,
+        "updated_at": now,
+    }
+
+
+def update_mail_template(
+    conn: sqlite3.Connection,
+    filename: str,
+    *,
+    region: str,
+    subject: str,
+    body: str,
+) -> dict[str, str]:
+    from mail.send import next_template_filename_for, require_template_filename
+
+    current_name = require_template_filename(filename)
+    row = conn.execute(
+        "SELECT filename, region FROM mail_templates WHERE filename = ?",
+        (current_name,),
+    ).fetchone()
+    if row is None:
+        raise FileNotFoundError(current_name)
+    slug, subject_text, body_text = _template_parts(region, subject, body)
+    now = utc_now()
+    if slug == row["region"]:
+        conn.execute(
+            """
+            UPDATE mail_templates
+            SET subject = ?, body = ?, updated_at = ?
+            WHERE filename = ?
+            """,
+            (subject_text, body_text, now, current_name),
+        )
+        return {
+            "filename": current_name,
+            "region": slug,
+            "subject": subject_text,
+            "body": body_text,
+            "updated_at": now,
+        }
+
+    names = [
+        item["filename"]
+        for item in conn.execute("SELECT filename FROM mail_templates").fetchall()
+    ]
+    new_name = next_template_filename_for(slug, names)
+    conn.execute(
+        """
+        INSERT INTO mail_templates (filename, region, subject, body, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (new_name, slug, subject_text, body_text, now),
+    )
+    conn.execute("DELETE FROM mail_templates WHERE filename = ?", (current_name,))
+    conn.execute(
+        "UPDATE users SET mail_template = ? WHERE mail_template = ?",
+        (new_name, current_name),
+    )
+    conn.execute(
+        "UPDATE queue_items SET template = ? WHERE template = ?",
+        (new_name, current_name),
+    )
+    return {
+        "filename": new_name,
+        "region": slug,
+        "subject": subject_text,
+        "body": body_text,
+        "updated_at": now,
+    }
+
+
+def delete_mail_template(conn: sqlite3.Connection, filename: str) -> None:
+    from mail.send import require_template_filename
+
+    current_name = require_template_filename(filename)
+    row = conn.execute(
+        "SELECT filename FROM mail_templates WHERE filename = ?",
+        (current_name,),
+    ).fetchone()
+    if row is None:
+        raise FileNotFoundError(current_name)
+    remaining = conn.execute(
+        "SELECT COUNT(*) AS n FROM mail_templates WHERE filename != ?",
+        (current_name,),
+    ).fetchone()["n"]
+    if int(remaining or 0) == 0:
+        raise ValueError("Cannot delete the last template")
+    conn.execute("DELETE FROM mail_templates WHERE filename = ?", (current_name,))
 
 
 def ensure_mail_sender_name(conn: sqlite3.Connection) -> None:
@@ -1407,35 +1608,29 @@ def set_scrape_paused(conn: sqlite3.Connection, paused: bool) -> None:
     set_meta(conn, "scrape_paused", "1" if paused else "0")
 
 
-def scrape_mail_cap_ratio(default: float = 1.5) -> float:
-    raw = os.environ.get("SCRAPE_MAIL_CAP_RATIO", str(default)).strip()
-    try:
-        ratio = float(raw)
-    except ValueError:
-        ratio = default
-    return max(0.1, ratio)
+DEFAULT_SCRAPE_DAILY_CAP = 50
 
 
-def get_scrape_daily_cap_override(conn: sqlite3.Connection) -> int | None:
-    """Absolute located-save cap, or None to use ratio × mail caps."""
+def scrape_cap_enabled(conn: sqlite3.Connection) -> bool:
+    """False means scrape with no daily limit. Missing flag stays on."""
+    raw = get_meta(conn, "scrape_cap_enabled", "").strip().lower()
+    return raw not in {"0", "false", "no"}
+
+
+def get_scrape_daily_cap(conn: sqlite3.Connection) -> int:
+    """Static located-save cap. Mail account caps are not part of this."""
     raw = get_meta(conn, "scrape_daily_cap", "").strip()
-    if not raw:
-        return None
     try:
         value = int(raw)
     except ValueError:
-        return None
+        return DEFAULT_SCRAPE_DAILY_CAP
     if value <= 0:
-        return None
+        return DEFAULT_SCRAPE_DAILY_CAP
     return value
 
 
-def set_scrape_daily_cap_override(
-    conn: sqlite3.Connection, cap: int | None
-) -> None:
-    if cap is None:
-        set_meta(conn, "scrape_daily_cap", "")
-        return
+def set_scrape_cap(conn: sqlite3.Connection, *, enabled: bool, cap: int) -> None:
+    set_meta(conn, "scrape_cap_enabled", "1" if enabled else "0")
     set_meta(conn, "scrape_daily_cap", str(max(1, int(cap))))
 
 
@@ -1528,50 +1723,55 @@ def count_users_saved_today(conn: sqlite3.Connection, day_prefix: str) -> int:
     )
 
 
-def auto_scrape_daily_save_limit(
-    conn: sqlite3.Connection,
-    *,
-    ratio: float = 1.5,
-    fallback_mail_cap: int = 20,
-    now: datetime | None = None,
-) -> int:
-    """ratio × active mail caps (ignores a dashboard override)."""
-    cap = get_active_daily_cap_sum(conn, now=now)
+def ensure_static_scrape_cap(conn: sqlite3.Connection) -> None:
+    """Keep a stored number. A previous mail-ratio cap is copied once, then left alone."""
+    if get_meta(conn, "scrape_cap_static_v1") == "1":
+        return
+    raw = get_meta(conn, "scrape_daily_cap", "").strip()
+    try:
+        existing = int(raw)
+    except ValueError:
+        existing = 0
+    if existing <= 0:
+        set_meta(conn, "scrape_daily_cap", str(_legacy_mail_ratio_cap(conn)))
+    if get_meta(conn, "scrape_cap_enabled", "").strip() == "":
+        set_meta(conn, "scrape_cap_enabled", "1")
+    set_meta(conn, "scrape_cap_static_v1", "1")
+
+
+def _legacy_mail_ratio_cap(conn: sqlite3.Connection) -> int:
+    """One-time copy of the old 1.5× mail-cap budget."""
+    raw = os.environ.get("SCRAPE_MAIL_CAP_RATIO", "1.5").strip()
+    try:
+        ratio = float(raw)
+    except ValueError:
+        ratio = 1.5
+    ratio = max(0.1, ratio)
+    fallback = os.environ.get("MAIL_DAILY_LIMIT", "20").strip()
+    try:
+        fallback_cap = max(1, int(fallback))
+    except ValueError:
+        fallback_cap = 20
+    cap = get_active_daily_cap_sum(conn)
     if cap <= 0:
-        cap = max(1, int(fallback_mail_cap))
-    return max(1, int(cap * float(ratio)))
+        cap = fallback_cap
+    return max(1, int(cap * ratio))
 
 
-def scrape_daily_save_limit(
-    conn: sqlite3.Connection,
-    *,
-    ratio: float = 1.5,
-    fallback_mail_cap: int = 20,
-    now: datetime | None = None,
-) -> int:
-    """Max located (non-noloc) users to save per Tokyo day.
-
-    Dashboard override wins; otherwise ratio × active mail caps.
-    """
-    override = get_scrape_daily_cap_override(conn)
-    if override is not None:
-        return override
-    return auto_scrape_daily_save_limit(
-        conn, ratio=ratio, fallback_mail_cap=fallback_mail_cap, now=now
-    )
+def scrape_daily_save_limit(conn: sqlite3.Connection) -> int | None:
+    """Max located saves per Tokyo day. None means no daily cap."""
+    if not scrape_cap_enabled(conn):
+        return None
+    return get_scrape_daily_cap(conn)
 
 
 def scrape_control_snapshot(
     conn: sqlite3.Connection,
     *,
-    ratio: float | None = None,
-    fallback_mail_cap: int = 20,
     now: datetime | None = None,
     stale_after_sec: float = SCRAPE_HEARTBEAT_STALE_SEC,
 ) -> dict[str, Any]:
     """Status + caps for the dashboard scraper page."""
-    if ratio is None:
-        ratio = scrape_mail_cap_ratio()
     if now is None:
         now = current_tokyo_datetime()
     elif now.tzinfo is None:
@@ -1582,11 +1782,9 @@ def scrape_control_snapshot(
     state = get_scrape_state(conn)
     day = local_day_prefix(now)
     saved_today = count_users_saved_today(conn, day)
-    auto_limit = auto_scrape_daily_save_limit(
-        conn, ratio=ratio, fallback_mail_cap=fallback_mail_cap, now=now
-    )
-    override = get_scrape_daily_cap_override(conn)
-    daily_limit = override if override is not None else auto_limit
+    enabled = scrape_cap_enabled(conn)
+    cap = get_scrape_daily_cap(conn)
+    daily_limit = cap if enabled else None
     paused = is_scrape_paused(conn)
     alive = scrape_process_alive(
         conn, now=now, stale_after_sec=stale_after_sec
@@ -1594,12 +1792,13 @@ def scrape_control_snapshot(
     loop = get_meta(conn, "scrape_loop", SCRAPE_LOOP_RUNNING)
     heartbeat_at = get_meta(conn, "scrape_heartbeat_at", "")
     heartbeat_age = scrape_heartbeat_age_sec(conn, now=now)
+    at_cap = daily_limit is not None and saved_today >= daily_limit
 
     if not alive:
         status = "stopped"
     elif paused:
         status = "paused"
-    elif saved_today >= daily_limit or loop == SCRAPE_LOOP_IDLING:
+    elif at_cap or (enabled and loop == SCRAPE_LOOP_IDLING):
         status = "idling"
     else:
         status = "running"
@@ -1612,10 +1811,8 @@ def scrape_control_snapshot(
         "total_users": state["total_saved"],
         "saved_today": saved_today,
         "daily_limit": daily_limit,
-        "auto_daily_limit": auto_limit,
-        "daily_limit_override": override,
-        "cap_mode": "manual" if override is not None else "auto",
-        "ratio": float(ratio),
+        "daily_cap": cap,
+        "cap_enabled": enabled,
         "day": day,
         "seconds_until_midnight": seconds_until_next_tokyo_midnight(now),
         "heartbeat_at": heartbeat_at or None,

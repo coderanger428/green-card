@@ -1,9 +1,0 @@
-Subject: Thought of you after looking at your GitHub
-Hi [Name],
-I stumbled on your Dev.to profile and ended up spending some time in your GitHub repos. Really clear work.
-I’m a senior full-stack developer who focuses on system design, architecture, and moving things well past the prototype phase. What stood out to me is how effectively you communicate with clients and product people while still speaking the technical language.
-I was wondering whether a collaboration could make sense: I take the engineering lead (design, architecture, building, delivery) and you own the client-facing side — keeping everyone aligned, presenting progress, managing relationships, and helping shape priorities. We’d talk through responsibilities, credit, and how we share things openly from day one.
-Would you be open to a quick call to explore whether this feels like a good fit? Completely fine if not.
-Looking forward to hearing your thoughts,
-
-[Your Name]

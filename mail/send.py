@@ -11,7 +11,7 @@ from mail.regions import (
     select_template_region,
 )
 
-TEMPLATES_DIR = Path("templates")
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -97,18 +97,16 @@ def list_templates(templates_dir: Path = TEMPLATES_DIR) -> list[dict[str, str]]:
     ]
 
 
-def templates_dir_mtime(templates_dir: Path = TEMPLATES_DIR) -> float:
-    if not templates_dir.is_dir():
-        return 0.0
-    mtimes = [path.stat().st_mtime for path in templates_dir.glob("*.txt")]
-    return max(mtimes) if mtimes else templates_dir.stat().st_mtime
-
-
-def _safe_template_path(filename: str, templates_dir: Path) -> Path:
+def require_template_filename(filename: str) -> str:
     name = Path(filename).name
     if name != filename or not name.endswith(".txt") or ".." in name:
         raise ValueError("Invalid template filename")
     region_from_filename(name)
+    return name
+
+
+def _safe_template_path(filename: str, templates_dir: Path) -> Path:
+    name = require_template_filename(filename)
     directory = templates_dir.resolve()
     path = (directory / name).resolve()
     if path.parent != directory:
@@ -116,18 +114,27 @@ def _safe_template_path(filename: str, templates_dir: Path) -> Path:
     return path
 
 
-def next_template_filename(region: str, templates_dir: Path = TEMPLATES_DIR) -> str:
+def next_template_filename_for(region: str, filenames) -> str:
     slug = canonical_template_region(region)
     highest = 0
     prefix = f"{slug} ("
-    for path in templates_dir.glob(f"{slug} (*).txt"):
-        stem = path.stem
+    for name in filenames:
+        stem = Path(name).stem
         if not stem.startswith(prefix) or not stem.endswith(")"):
             continue
         num_text = stem[len(prefix) : -1]
         if num_text.isdigit():
             highest = max(highest, int(num_text))
     return f"{slug} ({highest + 1}).txt"
+
+
+def next_template_filename(region: str, templates_dir: Path = TEMPLATES_DIR) -> str:
+    names = (
+        [path.name for path in templates_dir.glob("*.txt")]
+        if templates_dir.is_dir()
+        else []
+    )
+    return next_template_filename_for(region, names)
 
 
 def create_template(

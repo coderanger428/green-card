@@ -33,7 +33,7 @@ class TimezoneTests(unittest.TestCase):
         day_after = datetime(2026, 8, 12, 0, 1, tzinfo=timezone(timedelta(hours=9)))
         self.assertEqual(db.computed_mail_cap(created, now=day_after), 20)
 
-    def test_scrape_daily_save_limit_uses_mail_cap_ratio(self):
+    def test_scrape_daily_save_limit_is_a_static_number(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript(db.SCHEMA_SQL)
@@ -48,15 +48,10 @@ class TimezoneTests(unittest.TestCase):
             )
             conn.commit()
             now = datetime(2026, 8, 11, 12, 0, tzinfo=timezone(timedelta(hours=9)))
-            # Age < 1 day → cap 10; 1.5× → 15
             self.assertEqual(db.computed_mail_cap(created, now=now), 10)
-            self.assertEqual(db.scrape_daily_save_limit(conn, ratio=1.5, now=now), 15)
-            self.assertEqual(
-                db.scrape_daily_save_limit(
-                    conn, ratio=1.5, fallback_mail_cap=20, now=now
-                ),
-                15,
-            )
+            self.assertEqual(db.scrape_daily_save_limit(conn), db.DEFAULT_SCRAPE_DAILY_CAP)
+            db.set_scrape_cap(conn, enabled=False, cap=12)
+            self.assertIsNone(db.scrape_daily_save_limit(conn))
         finally:
             conn.close()
 

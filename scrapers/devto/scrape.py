@@ -2,9 +2,9 @@
 Scrape dev.to users by numeric ID; store contacts in app.db at the repo root (SQLite).
 
 Resume from scraper_parameter for this platform (Dev.to key: last_id).
-When today's *located* saves (country != noloc) hit 1.5× the active mail
-daily-cap sum, the scraper idles until the next Tokyo midnight — it does not
-exit (dashboard keeps sending). noloc saves do not count toward the cap.
+When today's located saves (country != noloc) hit the daily cap, the scraper
+idles until the next Tokyo midnight. With the cap turned off, it keeps going.
+noloc saves do not count toward the cap.
 """
 
 from __future__ import annotations
@@ -64,12 +64,10 @@ load_dotenv()
 _GITHUB_AUTH_WARNING_EMITTED = False
 
 
-def scrape_mail_cap_ratio() -> float:
-    return app_db.scrape_mail_cap_ratio()
-
-
-def fallback_mail_daily_limit() -> int:
-    return max(1, int(os.environ.get("MAIL_DAILY_LIMIT", "20")))
+def _budget_text(saved: int, limit: int | None) -> str:
+    if limit is None:
+        return f"{saved}/unlimited"
+    return f"{saved}/{limit}"
 
 
 def _heartbeat(conn, *, loop: str) -> None:
@@ -81,7 +79,7 @@ def poll_scrape_control(conn) -> dict:
     """Read pause/cap from SQLite (dashboard writes these) and refresh heartbeat."""
     paused = app_db.is_scrape_paused(conn)
     day, saved_today, save_limit = current_scrape_budget(conn)
-    at_cap = saved_today >= save_limit
+    at_cap = save_limit is not None and saved_today >= save_limit
     loop = (
         app_db.SCRAPE_LOOP_IDLING
         if (not paused and at_cap)
@@ -98,14 +96,13 @@ def poll_scrape_control(conn) -> dict:
     }
 
 
-def current_scrape_budget(conn) -> tuple[str, int, int]:
-    """Return (tokyo_day, located_saved_today, daily_limit). noloc excluded."""
+def current_scrape_budget(conn) -> tuple[str, int, int | None]:
+    """Return (tokyo_day, located_saved_today, daily_limit). noloc excluded.
+
+    daily_limit is None when the dashboard cap is off.
+    """
     day = app_db.local_day_prefix()
-    limit = app_db.scrape_daily_save_limit(
-        conn,
-        ratio=scrape_mail_cap_ratio(),
-        fallback_mail_cap=fallback_mail_daily_limit(),
-    )
+    limit = app_db.scrape_daily_save_limit(conn)
     saved_today = app_db.count_users_saved_today(conn, day)
     return day, saved_today, limit
 
@@ -336,9 +333,8 @@ def main() -> None:
             print(f"[scrape] purged {purged} user(s) from exclude-regions.txt")
         day, saved_today, save_limit = current_scrape_budget(conn)
         print(
-            f"[scrape] daily located-save budget {saved_today}/{save_limit} "
-            f"(Tokyo day {day}, ratio={scrape_mail_cap_ratio():g}× mail cap; "
-            "noloc excluded)"
+            f"[scrape] daily located-save budget {_budget_text(saved_today, save_limit)} "
+            f"(Tokyo day {day}; noloc excluded)"
         )
         wait_reason = ""
 
@@ -355,7 +351,7 @@ def main() -> None:
                 wait_reason = ""
                 print(
                     f"[scrape] new Tokyo day {day}: "
-                    f"located budget {saved_today}/{save_limit}"
+                    f"located budget {_budget_text(saved_today, save_limit)}"
                 )
 
             if ctrl["paused"]:
@@ -373,7 +369,7 @@ def main() -> None:
                 if wait_reason != "cap":
                     print(
                         f"[scrape] daily located-save cap reached "
-                        f"({saved_today}/{save_limit}); "
+                        f"({_budget_text(saved_today, save_limit)}); "
                         "idling until next Tokyo day or the dashboard cap is raised"
                     )
                     wait_reason = "cap"
@@ -382,7 +378,7 @@ def main() -> None:
 
             if wait_reason:
                 print(
-                    f"[scrape] resumed located budget {saved_today}/{save_limit} "
+                    f"[scrape] resumed located budget {_budget_text(saved_today, save_limit)} "
                     f"(Tokyo day {day})"
                 )
                 wait_reason = ""
@@ -449,7 +445,7 @@ def main() -> None:
                                         f"  saved -> {country} "
                                         f"({save_location or 'no location'}) "
                                         f"[{country}={ccount}, total={state['total_saved']}, "
-                                        f"located_today={saved_today}/{save_limit}]"
+                                        f"located_today={_budget_text(saved_today, save_limit)}]"
                                     )
                                 else:
                                     print(f"  skip duplicate email: {gmail}")

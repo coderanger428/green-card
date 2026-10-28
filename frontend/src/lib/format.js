@@ -59,19 +59,61 @@ export const maskEmail = (email) => {
   return `${local.slice(0, 2)}....${local.slice(-2)}${domain}`;
 };
 
-/** Title-case a country slug. A code of up to 3 letters is an abbreviation: uk -> UK. */
+const GROUP_LABELS = {
+  eu: 'EU',
+  emea: 'EMEA',
+  apac: 'APAC',
+  latam: 'LATAM',
+  etc: 'Other',
+};
+
+// Long and compound names use a short code. Single-word names stay as words.
+const COMPOUND_COUNTRY_CODES = {
+  usa: 'USA',
+  uk: 'UK',
+  uae: 'UAE',
+  new_zealand: 'NZ',
+  hong_kong: 'HK',
+  south_africa: 'ZA',
+  czech_republic: 'CZ',
+  costa_rica: 'CR',
+  saudi_arabia: 'SA',
+  south_korea: 'KR',
+  north_korea: 'KP',
+  sri_lanka: 'LK',
+  el_salvador: 'SV',
+  dominican_republic: 'DO',
+  puerto_rico: 'PR',
+  trinidad_and_tobago: 'TT',
+  ivory_coast: 'CI',
+  sierra_leone: 'SL',
+  cape_verde: 'CV',
+  north_macedonia: 'MK',
+  bosnia_and_herzegovina: 'BA',
+  papua_new_guinea: 'PG',
+  burkina_faso: 'BF',
+  georgia_country: 'Georgia',
+};
+
+const SMALL_NAME_WORDS = new Set(['and', 'of', 'the']);
+
+/** Short code for a long or compound country. A single word stays title case. */
 export const formatCountryName = (slug) => {
-  const words = String(slug || '')
-    .replace(/_/g, ' ')
+  const key = String(slug || '')
     .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (words.length === 1 && words[0].length <= 3) {
-    return words[0].toUpperCase();
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (!key) return '';
+  if (GROUP_LABELS[key]) return GROUP_LABELS[key];
+  if (COMPOUND_COUNTRY_CODES[key]) return COMPOUND_COUNTRY_CODES[key];
+  const words = key.split('_').filter(Boolean);
+  const significant = words.filter((word) => !SMALL_NAME_WORDS.has(word));
+  if (significant.length > 1) {
+    return significant.map((word) => word.charAt(0).toUpperCase()).join('');
   }
-  return words
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
+  const word = significant[0] || words[0] || '';
+  if (word.length <= 3) return word.toUpperCase();
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 };
 
 export const formatGroupMatchHint = (group, preview = 5) => {

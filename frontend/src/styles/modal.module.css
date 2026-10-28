@@ -123,6 +123,11 @@
   background: #ffffff;
 }
 
+.mail-modal select.template-select {
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
 .mail-modal input[type='email'],
 .mail-modal input[type='password'],
 .mail-modal input[type='text'],

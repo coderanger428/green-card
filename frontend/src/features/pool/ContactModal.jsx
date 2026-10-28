@@ -4,6 +4,7 @@ import { IconCopy, IconAt, IconChain, IconPhone } from '../../components/Icons';
 import { useDashboard } from '../../app/DashboardContext';
 import { socialProviderLabel, socialCopyValue } from '../../lib/social';
 import { copyText } from '../../lib/clipboard';
+import { templatePickerLabel } from '../../lib/templateText';
 import { cls } from '../../styles/cls';
 import ui from '../../styles/ui.module.css';
 import modal from '../../styles/modal.module.css';
@@ -80,6 +81,7 @@ export function ContactModal() {
                       <label>
                         Template
                         <select
+                          className={cls(modal, "template-select")}
                           value={contactModal.filename || ''}
                           onChange={(event) => reloadMailPreview({ template: event.target.value })}
                         >
@@ -88,7 +90,7 @@ export function ContactModal() {
                           ) : (
                             contactModal.templates.map((item) => (
                               <option key={item.filename} value={item.filename}>
-                                {item.filename}
+                                {templatePickerLabel(item)}
                               </option>
                             ))
                           )}

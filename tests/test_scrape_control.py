@@ -19,7 +19,7 @@ def _conn():
 
 
 class ScrapeCapOverrideTests(unittest.TestCase):
-    def test_auto_uses_mail_cap_ratio(self):
+    def test_default_cap_ignores_mail_accounts(self):
         conn = _conn()
         try:
             created = datetime.now(TOKYO).isoformat()
@@ -32,37 +32,52 @@ class ScrapeCapOverrideTests(unittest.TestCase):
                 ("sender@gmail.com", created, created),
             )
             conn.commit()
-            self.assertIsNone(db.get_scrape_daily_cap_override(conn))
-            self.assertEqual(db.scrape_daily_save_limit(conn, ratio=1.5), 15)
-            self.assertEqual(
-                db.auto_scrape_daily_save_limit(conn, ratio=1.5), 15
-            )
+            self.assertTrue(db.scrape_cap_enabled(conn))
+            self.assertEqual(db.scrape_daily_save_limit(conn), db.DEFAULT_SCRAPE_DAILY_CAP)
         finally:
             conn.close()
 
-    def test_manual_override_wins(self):
+    def test_static_cap_and_unlimited(self):
         conn = _conn()
         try:
-            created = datetime.now(TOKYO).isoformat()
-            conn.execute(
-                """
-                INSERT INTO mail_accounts
-                    (email, app_password, active, daily_cap, created_at, updated_at)
-                VALUES (?, 'pw', 1, 10, ?, ?)
-                """,
-                ("sender@gmail.com", created, created),
-            )
-            db.set_scrape_daily_cap_override(conn, 40)
+            db.set_scrape_cap(conn, enabled=True, cap=40)
             conn.commit()
-            self.assertEqual(db.get_scrape_daily_cap_override(conn), 40)
-            self.assertEqual(db.scrape_daily_save_limit(conn, ratio=1.5), 40)
-            self.assertEqual(
-                db.auto_scrape_daily_save_limit(conn, ratio=1.5), 15
-            )
-            db.set_scrape_daily_cap_override(conn, None)
-            self.assertEqual(db.scrape_daily_save_limit(conn, ratio=1.5), 15)
+            self.assertEqual(db.get_scrape_daily_cap(conn), 40)
+            self.assertEqual(db.scrape_daily_save_limit(conn), 40)
+            db.set_scrape_cap(conn, enabled=False, cap=40)
+            self.assertIsNone(db.scrape_daily_save_limit(conn))
+            self.assertEqual(db.get_scrape_daily_cap(conn), 40)
         finally:
             conn.close()
+
+    def test_startup_copies_a_mail_ratio_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db.init_db(root)
+            created = datetime.now(TOKYO).isoformat()
+            with db.get_conn(root) as conn:
+                db.set_meta(conn, "scrape_cap_static_v1", "")
+                db.set_meta(conn, "scrape_daily_cap", "")
+                db.set_meta(conn, "scrape_cap_enabled", "")
+                conn.execute(
+                    """
+                    INSERT INTO mail_accounts
+                        (email, app_password, active, daily_cap, created_at, updated_at)
+                    VALUES (?, 'pw', 1, 10, ?, ?)
+                    """,
+                    ("sender@gmail.com", created, created),
+                )
+                expected = db._legacy_mail_ratio_cap(conn)
+            db.init_db(root)
+            with db.get_conn(root) as conn:
+                self.assertEqual(db.get_scrape_daily_cap(conn), expected)
+                self.assertTrue(db.scrape_cap_enabled(conn))
+                db.set_scrape_cap(conn, enabled=False, cap=8)
+            db.init_db(root)
+            with db.get_conn(root) as conn:
+                self.assertFalse(db.scrape_cap_enabled(conn))
+                self.assertEqual(db.get_scrape_daily_cap(conn), 8)
+                self.assertIsNone(db.scrape_daily_save_limit(conn))
 
 
 class ScrapePauseAndHeartbeatTests(unittest.TestCase):
@@ -81,10 +96,11 @@ class ScrapePauseAndHeartbeatTests(unittest.TestCase):
         conn = _conn()
         try:
             now = datetime(2026, 8, 23, 14, 0, tzinfo=TOKYO)
-            snap = db.scrape_control_snapshot(conn, ratio=1.5, now=now)
+            snap = db.scrape_control_snapshot(conn, now=now)
             self.assertEqual(snap["status"], "stopped")
             self.assertFalse(snap["alive"])
-            self.assertEqual(snap["cap_mode"], "auto")
+            self.assertTrue(snap["cap_enabled"])
+            self.assertEqual(snap["daily_cap"], db.DEFAULT_SCRAPE_DAILY_CAP)
         finally:
             conn.close()
 
@@ -94,7 +110,7 @@ class ScrapePauseAndHeartbeatTests(unittest.TestCase):
             now = datetime(2026, 8, 23, 14, 0, tzinfo=TOKYO)
             db.set_meta(conn, "scrape_heartbeat_at", now.isoformat())
             db.set_meta(conn, "scrape_loop", db.SCRAPE_LOOP_RUNNING)
-            snap = db.scrape_control_snapshot(conn, ratio=1.5, now=now)
+            snap = db.scrape_control_snapshot(conn, now=now)
             self.assertTrue(snap["alive"])
             self.assertEqual(snap["status"], "running")
         finally:
@@ -106,7 +122,7 @@ class ScrapePauseAndHeartbeatTests(unittest.TestCase):
             now = datetime(2026, 8, 23, 14, 0, tzinfo=TOKYO)
             db.set_scrape_paused(conn, True)
             db.set_meta(conn, "scrape_heartbeat_at", now.isoformat())
-            snap = db.scrape_control_snapshot(conn, ratio=1.5, now=now)
+            snap = db.scrape_control_snapshot(conn, now=now)
             self.assertEqual(snap["status"], "paused")
             self.assertTrue(snap["paused"])
         finally:
@@ -118,7 +134,7 @@ class ScrapePauseAndHeartbeatTests(unittest.TestCase):
             now = datetime(2026, 8, 23, 14, 0, tzinfo=TOKYO)
             stale = now - timedelta(seconds=db.SCRAPE_HEARTBEAT_STALE_SEC + 5)
             db.set_meta(conn, "scrape_heartbeat_at", stale.isoformat())
-            snap = db.scrape_control_snapshot(conn, ratio=1.5, now=now)
+            snap = db.scrape_control_snapshot(conn, now=now)
             self.assertEqual(snap["status"], "stopped")
             self.assertFalse(snap["alive"])
         finally:
@@ -129,7 +145,7 @@ class ScrapePauseAndHeartbeatTests(unittest.TestCase):
         try:
             now = datetime(2026, 8, 23, 14, 0, tzinfo=TOKYO)
             db.set_meta(conn, "scrape_heartbeat_at", now.isoformat())
-            db.set_scrape_daily_cap_override(conn, 1)
+            db.set_scrape_cap(conn, enabled=True, cap=1)
             conn.execute(
                 """
                 INSERT INTO users (id, email, name, link, location, country,
@@ -138,11 +154,35 @@ class ScrapePauseAndHeartbeatTests(unittest.TestCase):
                 """,
                 (now.isoformat(), now.isoformat()),
             )
-            snap = db.scrape_control_snapshot(conn, ratio=1.5, now=now)
+            snap = db.scrape_control_snapshot(conn, now=now)
             self.assertEqual(snap["status"], "idling")
             self.assertEqual(snap["saved_today"], 1)
             self.assertEqual(snap["daily_limit"], 1)
-            self.assertEqual(snap["cap_mode"], "manual")
+            self.assertTrue(snap["cap_enabled"])
+        finally:
+            conn.close()
+
+    def test_snapshot_keeps_running_when_cap_is_off(self):
+        conn = _conn()
+        try:
+            now = datetime(2026, 8, 23, 14, 0, tzinfo=TOKYO)
+            db.set_meta(conn, "scrape_heartbeat_at", now.isoformat())
+            db.set_meta(conn, "scrape_loop", db.SCRAPE_LOOP_IDLING)
+            db.set_scrape_cap(conn, enabled=False, cap=1)
+            conn.execute(
+                """
+                INSERT INTO users (id, email, name, link, location, country,
+                                   created_at, updated_at)
+                VALUES (1, 'a@example.com', '', '', '', 'usa', ?, ?)
+                """,
+                (now.isoformat(), now.isoformat()),
+            )
+            snap = db.scrape_control_snapshot(conn, now=now)
+            self.assertEqual(snap["status"], "running")
+            self.assertFalse(snap["cap_enabled"])
+            self.assertIsNone(snap["daily_limit"])
+            self.assertEqual(snap["daily_cap"], 1)
+            self.assertEqual(snap["saved_today"], 1)
         finally:
             conn.close()
 

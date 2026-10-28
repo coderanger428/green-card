@@ -17,8 +17,8 @@ export function ScraperView() {
     scraperInfo,
     selectedScraper,
     setSelectedScraper,
-    capMode,
-    setCapMode,
+    capEnabled,
+    setCapEnabled,
     capInput,
     setCapInput,
     setCapDirty,
@@ -132,49 +132,23 @@ export function ScraperView() {
                       <strong>Located saved today</strong>
                       <DailyCapProgress
                         sent={scraperInfo.saved_today}
-                        limit={scraperInfo.daily_limit}
+                        limit={
+                          scraperInfo.cap_enabled === false ? null : scraperInfo.daily_limit
+                        }
                       />
-                    </div>
-                    <div className={cls(ui, "status-stat")}>
-                      <strong>Cap mode</strong>
-                      <div className={cls(ui, "status-stat-value")}>
-                        {scraperInfo.cap_mode === 'manual' ? 'Manual' : 'Auto'}
-                      </div>
                     </div>
                   </div>
                   <div className={cls(scraper, "scraper-cap-form")}>
                     <label className={cls(scraper, "checkbox-label")}>
                       <input
-                        type="radio"
-                        name="scrape-cap-mode"
-                        checked={capMode === 'auto'}
-                        onChange={() => {
-                          setCapMode('auto');
-                          setCapInput(String(scraperInfo.auto_daily_limit ?? ''));
+                        type="checkbox"
+                        checked={capEnabled}
+                        onChange={(event) => {
+                          setCapEnabled(event.target.checked);
                           setCapDirty(true);
                         }}
                       />
-                      Auto ({Number(scraperInfo.ratio) || 1.5}× mail caps ={' '}
-                      {scraperInfo.auto_daily_limit})
-                    </label>
-                    <label className={cls(scraper, "checkbox-label")}>
-                      <input
-                        type="radio"
-                        name="scrape-cap-mode"
-                        checked={capMode === 'manual'}
-                        onChange={() => {
-                          setCapMode('manual');
-                          setCapInput(
-                            String(
-                              scraperInfo.daily_limit_override ??
-                                scraperInfo.daily_limit ??
-                                ''
-                            )
-                          );
-                          setCapDirty(true);
-                        }}
-                      />
-                      Manual
+                      Apply daily cap
                     </label>
                     <label className={cls(scraper, "scraper-cap-input")}>
                       Located users per Tokyo day
@@ -183,7 +157,6 @@ export function ScraperView() {
                         min="1"
                         step="1"
                         value={capInput}
-                        disabled={capMode !== 'manual'}
                         onChange={(event) => {
                           setCapInput(event.target.value);
                           setCapDirty(true);
@@ -196,9 +169,8 @@ export function ScraperView() {
                         onClick={handleSaveScrapeCap}
                         disabled={
                           loading ||
-                          (capMode === 'manual' &&
-                            (!Number.isInteger(Number(capInput)) ||
-                              Number(capInput) < 1))
+                          !Number.isInteger(Number(capInput)) ||
+                          Number(capInput) < 1
                         }
                       >
                         Save cap

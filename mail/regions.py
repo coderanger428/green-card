@@ -361,21 +361,52 @@ def select_template_region(country: str | None, available: Iterable[str]) -> str
     return next(iter(sorted(have)), FALLBACK_REGION)
 
 
+# Long and compound country names. Single-word names stay as words.
+_COMPOUND_COUNTRY_CODES = {
+    "usa": "USA",
+    "uk": "UK",
+    "uae": "UAE",
+    "new_zealand": "NZ",
+    "hong_kong": "HK",
+    "south_africa": "ZA",
+    "czech_republic": "CZ",
+    "costa_rica": "CR",
+    "saudi_arabia": "SA",
+    "south_korea": "KR",
+    "north_korea": "KP",
+    "sri_lanka": "LK",
+    "el_salvador": "SV",
+    "dominican_republic": "DO",
+    "puerto_rico": "PR",
+    "trinidad_and_tobago": "TT",
+    "ivory_coast": "CI",
+    "sierra_leone": "SL",
+    "cape_verde": "CV",
+    "north_macedonia": "MK",
+    "bosnia_and_herzegovina": "BA",
+    "papua_new_guinea": "PG",
+    "burkina_faso": "BF",
+    "georgia_country": "Georgia",
+}
+_SMALL_NAME_WORDS = frozenset({"and", "of", "the"})
+
+
 def region_label(slug: str) -> str:
-    key = (slug or "").strip().lower()
+    key = (slug or "").strip().lower().replace(" ", "_").replace("-", "_")
     for item in GROUP_META:
         if item["slug"] == key:
             return item["label"]
-    if key == "usa":
-        return "United States"
-    if key == "uk":
-        return "United Kingdom"
-    if key == "uae":
-        return "UAE"
-    text = key.replace("_", " ").strip()
-    if not text:
+    if key in _COMPOUND_COUNTRY_CODES:
+        return _COMPOUND_COUNTRY_CODES[key]
+    words = [part for part in key.split("_") if part and part not in _SMALL_NAME_WORDS]
+    if len(words) > 1:
+        return "".join(part[0].upper() for part in words)
+    word = words[0] if words else ""
+    if not word:
         return "Unknown"
-    return " ".join(part.capitalize() for part in text.split())
+    if len(word) <= 3:
+        return word.upper()
+    return word.capitalize()
 
 
 def suggestion_catalog(
