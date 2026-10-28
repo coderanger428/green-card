@@ -1,5 +1,5 @@
 """
-Local mail dashboard: browse users, enqueue, drip-send under daily cap.
+Local mail dashboard: browse users and render mail templates.
 
 Build the React UI, then run one server (API + static):
 
@@ -10,18 +10,15 @@ Build the React UI, then run one server (API + static):
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import smtplib
-import socket
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 
@@ -33,11 +30,6 @@ from core.locations import (
     is_skipped_country,
     suggest_places,
 )
-from mail.schedule import (
-    paced_delay_sec,
-    paced_interval_sec,
-    remaining_tokyo_day_sec,
-)
 from core.github_enrich import (
     format_expiration_label,
     github_token_accepted,
@@ -46,11 +38,7 @@ from core.github_enrich import (
     token_expires_soon,
 )
 from mail.send import (
-    GMAIL_APP_PASSWORD,
-    SENDER_EMAILS,
     TEMPLATES_DIR,
-    build_message,
-    choose_sender,
     create_template,
     delete_template,
     list_templates,
@@ -63,14 +51,6 @@ from mail.regions import decorate_template, suggestion_catalog
 
 RESULT_DIR = Path(os.environ.get("RESULT_DIR", str(app_db.PROJECT_ROOT)))
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", "frontend/dist"))
-
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465
-UTC = timezone.utc
-
-# Floor between sends when the Tokyo day still has room (seconds).
-DRIP_DELAY_MIN = int(os.environ.get("MAIL_DRIP_DELAY_MIN", "30"))
-DNS_RETRY_DELAY_SEC = max(15, int(os.environ.get("MAIL_DNS_RETRY_DELAY", "30")))
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -95,381 +75,19 @@ def daily_limit() -> int:
     return max(1, int(os.environ.get("MAIL_DAILY_LIMIT", "20")))
 
 
-def accumulated_daily_limit(conn) -> int:
-    total = app_db.get_active_daily_cap_sum(conn)
-    return total if total > 0 else daily_limit()
-
-
 def local_day_prefix() -> str:
     return app_db.local_day_prefix()
 
 
 def _overview(conn) -> dict[str, Any]:
-    state = app_db.get_scrape_state(conn)
-    qstats = app_db.queue_stats(conn)
-    queued = qstats.get("queued", 0)
-    sent_today = app_db.count_sent_today(conn, local_day_prefix())
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM users"
+    ).fetchone()
     return {
-        "last_id": state["last_id"],
-        "total_users": state["total_saved"],
-        "queue": qstats,
-        "queued": queued,
-        "sent_today": sent_today,
-        "daily_limit": accumulated_daily_limit(conn),
-        "drip_paused": app_db.is_drip_paused(conn),
+        "last_id": int(row["last_id"] or 0),
+        "total_users": int(row["n"]),
         "day": local_day_prefix(),
     }
-
-
-def _drip_delay_sec(remaining_cap: int, remaining_sec: float) -> float:
-    """Seconds to wait after a send so leftover cap lasts until Tokyo midnight."""
-    return paced_delay_sec(
-        remaining_cap, remaining_sec, min_sec=float(DRIP_DELAY_MIN)
-    )
-
-
-def _post_send_delay_estimate(when_utc: datetime, remaining_cap: int) -> float:
-    """Deterministic interval for 'will send at' (no jitter)."""
-    remaining_sec = remaining_tokyo_day_sec(when_utc)
-    return paced_interval_sec(
-        remaining_cap, remaining_sec, min_sec=float(DRIP_DELAY_MIN)
-    )
-
-
-def _next_tokyo_midnight_utc(when_utc: datetime) -> datetime:
-    if when_utc.tzinfo is None:
-        when_utc = when_utc.replace(tzinfo=UTC)
-    else:
-        when_utc = when_utc.astimezone(UTC)
-    tokyo = when_utc.astimezone(app_db.TOKYO_TZ)
-    tomorrow = (tokyo + timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return tomorrow.astimezone(UTC)
-
-
-def estimate_queue_send_times(
-    items: list[dict[str, Any]],
-    *,
-    sent_today: int,
-    daily_limit: int,
-    drip_paused: bool,
-    now: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Attach estimated_send_at (ISO) for queue UI. FIFO, paced across the Tokyo day."""
-    now_utc = now or datetime.now(UTC)
-    if now_utc.tzinfo is None:
-        now_utc = now_utc.replace(tzinfo=UTC)
-    else:
-        now_utc = now_utc.astimezone(UTC)
-
-    cursor = now_utc
-    remaining_today = max(0, int(daily_limit) - int(sent_today))
-    pending = [dict(item) for item in items]
-    enriched_by_id: dict[Any, dict[str, Any]] = {}
-
-    for item in pending:
-        row = dict(item)
-        status = (row.get("status") or "").lower()
-        if drip_paused:
-            row["estimated_send_at"] = None
-            row["estimated_send_label"] = "Paused"
-            enriched_by_id[row.get("queue_id")] = row
-            continue
-        if status == "sending":
-            row["estimated_send_at"] = now_utc.isoformat()
-            row["estimated_send_label"] = "Sending now"
-            enriched_by_id[row.get("queue_id")] = row
-            if remaining_today > 0:
-                remaining_today -= 1
-            cursor = now_utc + timedelta(
-                seconds=_post_send_delay_estimate(now_utc, remaining_today)
-            )
-            continue
-        row["estimated_send_label"] = None
-        enriched_by_id[row.get("queue_id")] = row
-
-    sim_pending = [
-        dict(item)
-        for item in pending
-        if (item.get("status") or "").lower() not in ("sending",)
-        and not drip_paused
-    ]
-
-    while sim_pending:
-        if remaining_today <= 0:
-            cursor = max(cursor, _next_tokyo_midnight_utc(cursor))
-            remaining_today = max(1, int(daily_limit))
-
-        item = sim_pending.pop(0)
-        send_at = cursor
-        qid = item.get("queue_id")
-        row = enriched_by_id[qid]
-        row["estimated_send_at"] = send_at.isoformat()
-        remaining_today -= 1
-        if remaining_today <= 0:
-            cursor = _next_tokyo_midnight_utc(send_at)
-            remaining_today = max(1, int(daily_limit))
-        else:
-            gap = _post_send_delay_estimate(send_at, remaining_today)
-            cursor = send_at + timedelta(seconds=gap)
-
-    return [enriched_by_id[item.get("queue_id")] for item in pending]
-
-
-def sort_queue_by_send_time(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Soonest send first (sending now, then estimated time, then paused)."""
-
-    def key(item: dict[str, Any]) -> tuple[int, str]:
-        status = (item.get("status") or "").lower()
-        if status == "sending":
-            return (0, item.get("estimated_send_at") or "")
-        send_at = item.get("estimated_send_at") or ""
-        if send_at:
-            return (1, send_at)
-        return (2, item.get("queued_at") or "")
-
-    return sorted(items, key=key)
-
-
-def is_smtp_dns_error(exc: BaseException) -> bool:
-    """True when the local resolver cannot resolve the SMTP host (sender-side)."""
-    if isinstance(exc, socket.gaierror):
-        return True
-    if isinstance(exc, OSError):
-        winerror = getattr(exc, "winerror", None)
-        # Windows: WSAHOST_NOT_FOUND / WSATRY_AGAIN
-        if winerror in {11001, 11002}:
-            return True
-        errno = getattr(exc, "errno", None)
-        if errno in {
-            getattr(socket, "EAI_AGAIN", -3),
-            getattr(socket, "EAI_FAIL", -4),
-            getattr(socket, "EAI_NONAME", -2),
-        }:
-            return True
-    text = f"{type(exc).__name__}: {exc}".lower()
-    markers = (
-        "getaddrinfo",
-        "name or service not known",
-        "temporary failure in name resolution",
-        "nodename nor servname provided",
-    )
-    return any(marker in text for marker in markers)
-
-
-def smtp_host_resolves(host: str = SMTP_HOST, port: int = SMTP_PORT) -> bool:
-    try:
-        socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
-        return True
-    except OSError:
-        return False
-
-
-async def wait_for_smtp_dns(stop: asyncio.Event) -> bool:
-    """
-    Pause until smtp host DNS works again (or stop is set).
-    Returns True if DNS recovered, False if shutting down.
-    """
-    while not stop.is_set():
-        if await asyncio.to_thread(smtp_host_resolves):
-            print(f"[drip] DNS recovered for {SMTP_HOST}")
-            return True
-        print(
-            f"[drip] SMTP DNS still unavailable ({SMTP_HOST}); "
-            f"retry in {DNS_RETRY_DELAY_SEC}s"
-        )
-        await asyncio.wait(
-            [asyncio.create_task(stop.wait())],
-            timeout=float(DNS_RETRY_DELAY_SEC),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-    return False
-
-
-async def drip_worker(stop: asyncio.Event) -> None:
-    """Background loop: FIFO send, then wait so leftover cap lasts until midnight."""
-    template_pool = None
-    pool_mtime = None
-    while not stop.is_set():
-        try:
-            with app_db.get_conn(RESULT_DIR) as conn:
-                limit = accumulated_daily_limit(conn)
-                paused = app_db.is_drip_paused(conn)
-                sent_today = app_db.count_sent_today(conn, local_day_prefix())
-                queued = app_db.list_queued_items(conn, limit=500)
-
-            if paused:
-                await asyncio.wait(
-                    [asyncio.create_task(stop.wait())],
-                    timeout=30.0,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                continue
-
-            if sent_today >= limit:
-                tokyo_now = app_db.current_tokyo_datetime()
-                secs = app_db.seconds_until_next_tokyo_midnight(tokyo_now)
-                sleep_for = min(60.0, max(1.0, secs))
-                print(
-                    f"[drip] daily cap reached ({sent_today}/{limit}); "
-                    f"waiting for Tokyo midnight (~{secs / 3600:.1f}h)"
-                )
-                await asyncio.wait(
-                    [asyncio.create_task(stop.wait())],
-                    timeout=sleep_for,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                continue
-
-            if not queued:
-                await asyncio.wait(
-                    [asyncio.create_task(stop.wait())],
-                    timeout=30.0,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                continue
-
-            item = queued[0]
-
-            mtime = templates_dir_mtime(TEMPLATES_DIR)
-            if template_pool is None or mtime != pool_mtime:
-                try:
-                    template_pool = load_template_pool(TEMPLATES_DIR)
-                    pool_mtime = mtime
-                except FileNotFoundError as e:
-                    print(f"[drip] templates unavailable: {e}")
-                    await asyncio.wait(
-                        [asyncio.create_task(stop.wait())],
-                        timeout=30.0,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    continue
-
-            with app_db.get_conn(RESULT_DIR) as conn:
-                active_account = app_db.get_next_active_mail_account(
-                    conn,
-                    local_day_prefix(),
-                )
-                db_accounts = app_db.get_mail_accounts(conn)
-
-            if active_account:
-                from_email = active_account["email"]
-                password = str(active_account["app_password"]).strip()
-                sender_name = str(active_account.get("sender_name") or "").strip()
-            elif not db_accounts and SENDER_EMAILS:
-                from_email = choose_sender()
-                password = (
-                    os.environ.get("GMAIL_APP_PASSWORD") or GMAIL_APP_PASSWORD or ""
-                ).strip()
-                sender_name = ""
-            else:
-                print(
-                    "[drip] no available active mail account or all active accounts reached daily cap; pausing drip"
-                )
-                with app_db.get_conn(RESULT_DIR) as conn:
-                    app_db.set_drip_paused(conn, True)
-                await asyncio.sleep(60)
-                continue
-
-            if not from_email or not password:
-                print("[drip] sender address / GMAIL_APP_PASSWORD not set; pausing drip")
-                with app_db.get_conn(RESULT_DIR) as conn:
-                    app_db.set_drip_paused(conn, True)
-                await asyncio.sleep(60)
-                continue
-
-            queue_id = int(item["queue_id"])
-            user_id = int(item["user_id"])
-            template_name, subject, body = pick_message(
-                template_pool,
-                item.get("country") or "",
-                app_db.greeting_name(
-                    item.get("display_name"), item.get("name")
-                ),
-                sender_name,
-                item.get("link") or "",
-            )
-
-            if not await asyncio.to_thread(smtp_host_resolves):
-                with app_db.get_conn(RESULT_DIR) as conn:
-                    app_db.set_drip_paused(conn, True)
-                print(
-                    f"[drip] SMTP DNS unavailable ({SMTP_HOST}); "
-                    "pausing all sends until DNS recovers"
-                )
-                recovered = await wait_for_smtp_dns(stop)
-                if recovered:
-                    with app_db.get_conn(RESULT_DIR) as conn:
-                        app_db.set_drip_paused(conn, False)
-                    print("[drip] resuming mail sending")
-                continue
-
-            with app_db.get_conn(RESULT_DIR) as conn:
-                app_db.mark_queue_sending(conn, queue_id, sender_email=from_email)
-
-            try:
-                msg = build_message(from_email, item["email"], subject, body)
-                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as smtp:
-                    smtp.login(from_email, password)
-                    smtp.send_message(msg)
-                with app_db.get_conn(RESULT_DIR) as conn:
-                    app_db.mark_queue_sent(
-                        conn, queue_id, user_id, template_name, subject
-                    )
-                print(f"[drip] sent -> {item['email']} ({template_name})")
-            except Exception as e:
-                err = f"{type(e).__name__}: {e}"
-                if is_smtp_dns_error(e):
-                    with app_db.get_conn(RESULT_DIR) as conn:
-                        app_db.mark_queue_requeue(
-                            conn,
-                            queue_id,
-                            user_id,
-                            error=f"paused: SMTP DNS unavailable ({err})",
-                        )
-                        app_db.set_drip_paused(conn, True)
-                    print(
-                        f"[drip] SMTP DNS unavailable ({SMTP_HOST}): {err}; "
-                        "pausing all sends until DNS recovers"
-                    )
-                    recovered = await wait_for_smtp_dns(stop)
-                    if recovered:
-                        with app_db.get_conn(RESULT_DIR) as conn:
-                            app_db.set_drip_paused(conn, False)
-                        print("[drip] resuming mail sending")
-                    continue
-
-                with app_db.get_conn(RESULT_DIR) as conn:
-                    app_db.mark_queue_failed(
-                        conn,
-                        queue_id,
-                        user_id,
-                        template_name,
-                        subject,
-                        err,
-                    )
-                print(f"[drip] failed -> {item['email']}: {err}")
-
-            with app_db.get_conn(RESULT_DIR) as conn:
-                limit = accumulated_daily_limit(conn)
-                sent_today = app_db.count_sent_today(conn, local_day_prefix())
-            remaining = max(0, int(limit) - int(sent_today))
-            remaining_sec = remaining_tokyo_day_sec()
-            delay = (
-                1.0
-                if remaining <= 0
-                else _drip_delay_sec(remaining, remaining_sec)
-            )
-            print(f"[drip] next send in ~{int(delay)}s")
-            await asyncio.wait(
-                [asyncio.create_task(stop.wait())],
-                timeout=float(delay),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except Exception as e:
-            print(f"[drip] worker error: {e}")
-            await asyncio.sleep(30)
 
 
 @asynccontextmanager
@@ -492,10 +110,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Dev.to Mail Dashboard", lifespan=lifespan)
-
-
-class IdsBody(BaseModel):
-    user_ids: list[int] = Field(default_factory=list)
 
 
 class PauseBody(BaseModel):
@@ -535,6 +149,7 @@ class ContactBody(BaseModel):
     status: Literal["not_sent", "sent", "failed"]
     sender_email: str | None = None
     url: str | None = None
+    template: str | None = Field(default=None, max_length=200)
 
 
 class TemplateBody(BaseModel):
@@ -553,20 +168,7 @@ def api_mail_account_add(body: MailAccountBody) -> dict[str, Any]:
             sender_name=_require_sender_name(body.sender_name),
             active=True,
         )
-        overview = _overview(conn)
-        sent_by_sender_today = app_db.count_sent_by_sender_today(conn, local_day_prefix())
-        sent_by_sender_total = app_db.count_sent_by_sender_total(conn)
-        total_sent = app_db.count_sent_total(conn)
-
-    return {
-        "ok": True,
-        "account": account,
-        "daily_limit": overview["daily_limit"],
-        "sent_today": overview["sent_today"],
-        "total_sent": total_sent,
-        "sent_by_sender_today": sent_by_sender_today,
-        "sent_by_sender_total": sent_by_sender_total,
-    }
+    return {"ok": True, "account": account}
 
 
 @app.put("/api/mail-accounts/{email}")
@@ -575,7 +177,6 @@ def api_mail_account_update(email: str, body: MailAccountUpdateBody) -> dict[str
         existing = app_db.get_mail_account_by_email(conn, email)
         if existing is None:
             raise HTTPException(404, "Mail account not found")
-
         account = app_db.upsert_mail_account(
             conn,
             email=email,
@@ -583,20 +184,7 @@ def api_mail_account_update(email: str, body: MailAccountUpdateBody) -> dict[str
             sender_name=_require_sender_name(body.sender_name),
             active=True,
         )
-        overview = _overview(conn)
-        sent_by_sender_today = app_db.count_sent_by_sender_today(conn, local_day_prefix())
-        sent_by_sender_total = app_db.count_sent_by_sender_total(conn)
-        total_sent = app_db.count_sent_total(conn)
-
-    return {
-        "ok": True,
-        "account": account,
-        "daily_limit": overview["daily_limit"],
-        "sent_today": overview["sent_today"],
-        "total_sent": total_sent,
-        "sent_by_sender_today": sent_by_sender_today,
-        "sent_by_sender_total": sent_by_sender_total,
-    }
+    return {"ok": True, "account": account}
 
 
 @app.delete("/api/mail-accounts/{email}")
@@ -605,16 +193,7 @@ def api_mail_account_delete(email: str) -> dict[str, Any]:
         deleted = app_db.delete_mail_account(conn, email)
         if not deleted:
             raise HTTPException(404, "Mail account not found")
-        overview = _overview(conn)
-        total_sent = app_db.count_sent_total(conn)
-
-    return {
-        "ok": True,
-        "deleted": email,
-        "daily_limit": overview["daily_limit"],
-        "sent_today": overview["sent_today"],
-        "total_sent": total_sent,
-    }
+    return {"ok": True, "deleted": email}
 
 
 @app.get("/")
@@ -777,23 +356,7 @@ def api_users(
                    u.socials, u.location,
                    u.country, u.source, u.mail_status, u.social_status, u.outcome,
                    u.created_at, u.updated_at,
-                   COALESCE(
-                     NULLIF(TRIM(u.sender_email), ''),
-                     (
-                       SELECT q.sender_email
-                       FROM queue_items q
-                       WHERE q.user_id = u.id AND q.status = 'sent'
-                       ORDER BY q.sent_at DESC, q.id DESC
-                       LIMIT 1
-                     )
-                   ) AS sender_email,
-                   (
-                     SELECT error
-                     FROM queue_items q
-                     WHERE q.user_id = u.id AND q.status = 'failed'
-                     ORDER BY q.sent_at DESC, q.id DESC
-                     LIMIT 1
-                   ) AS last_error
+                   u.sender_email, u.mail_template
             FROM users u
             {clause}
             ORDER BY u.id DESC
@@ -845,7 +408,11 @@ def _require_sender_name(value: str) -> str:
 
 
 @app.get("/api/users/{user_id}/mail-preview")
-def api_mail_preview(user_id: int, sender: str = "") -> dict[str, Any]:
+def api_mail_preview(
+    user_id: int,
+    sender: str = "",
+    template: str = "",
+) -> dict[str, Any]:
     with app_db.get_conn(RESULT_DIR) as conn:
         row = conn.execute(
             "SELECT id, name, display_name, link, country FROM users WHERE id = ?",
@@ -871,6 +438,7 @@ def api_mail_preview(user_id: int, sender: str = "") -> dict[str, Any]:
         app_db.greeting_name(row["display_name"], row["name"]),
         _sender_display_name(chosen, stored_name),
         row["link"] or "",
+        filename=template,
     )
     return {
         "filename": filename,
@@ -878,6 +446,15 @@ def api_mail_preview(user_id: int, sender: str = "") -> dict[str, Any]:
         "body": body,
         "sender": chosen,
         "senders": senders,
+        "templates": [
+            {
+                "filename": item["filename"],
+                "region": item.get("region") or "",
+                "subject": item.get("subject") or "",
+                "body": item.get("body") or "",
+            }
+            for item in pool
+        ],
     }
 
 
@@ -892,6 +469,7 @@ def api_user_contact(user_id: int, body: ContactBody) -> dict[str, Any]:
                 status=body.status,
                 sender_email=body.sender_email,
                 social_url=body.url,
+                template=body.template,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -978,25 +556,6 @@ def api_scraper_cap(body: ScrapeCapBody) -> dict[str, Any]:
         else:
             app_db.set_scrape_daily_cap_override(conn, int(body.daily_cap))
         return {"ok": True, "scraper": _scraper_payload(conn)}
-
-
-@app.get("/api/activity")
-def api_activity(limit: int = Query(50, ge=1, le=200)) -> list[dict[str, Any]]:
-    with app_db.get_conn(RESULT_DIR) as conn:
-        rows = conn.execute(
-            """
-            SELECT q.id AS queue_id, q.status, q.queued_at, q.sent_at,
-                   q.sender_email, q.template, q.subject, q.error,
-                   u.email, u.name, u.display_name, u.country
-            FROM queue_items q
-            JOIN users u ON u.id = q.user_id
-            WHERE q.status IN ('sent', 'failed')
-            ORDER BY COALESCE(q.sent_at, q.queued_at) DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    return [app_db.row_to_dict(r) for r in rows]
 
 
 GITHUB_TOKEN_CHECK_TTL = timedelta(minutes=10)
@@ -1128,49 +687,13 @@ def api_github_token_delete() -> dict[str, Any]:
 @app.get("/api/mail-accounts")
 def api_mail_accounts() -> dict[str, Any]:
     with app_db.get_conn(RESULT_DIR) as conn:
-        overview = _overview(conn)
         accounts = app_db.get_mail_accounts(conn)
-        sent_by_sender_today = app_db.count_sent_by_sender_today(conn, local_day_prefix())
         sent_by_sender_total = app_db.count_sent_by_sender_total(conn)
-        total_sent = app_db.count_sent_total(conn)
-        active_account = app_db.get_next_active_mail_account(
-            conn,
-            local_day_prefix(),
-        )
-        current_sender = active_account["email"] if active_account else None
-
-        if accounts:
-            for account in accounts:
-                email = account.get("email", "")
-                active = bool(account.get("active"))
-                account["active"] = active
-                account["status"] = "current" if email == current_sender else ("active" if active else "inactive")
-                account["sent_today"] = sent_by_sender_today.get(email, 0)
-                account["sent_total"] = sent_by_sender_total.get(str(email).strip().lower(), 0)
-                account["current"] = email == current_sender
-        else:
-            accounts = [
-                {
-                    "email": sender,
-                    "active": True,
-                    "status": "current" if sender == current_sender else "active",
-                    "sent_today": sent_by_sender_today.get(sender, 0),
-                    "sent_total": sent_by_sender_total.get(sender, 0),
-                    "sender_name": "",
-                    "current": sender == current_sender,
-                }
-                for sender in sorted({email.strip() for email in SENDER_EMAILS if email.strip()})
-            ]
-
-    return {
-        "accounts": accounts,
-        "current_sender": current_sender,
-        "daily_limit": overview["daily_limit"],
-        "sent_today": overview["sent_today"],
-        "total_sent": total_sent,
-        "queue": overview["queue"],
-        "queued": overview["queued"],
-    }
+        for account in accounts:
+            email = str(account.get("email") or "")
+            account["active"] = bool(account.get("active"))
+            account["sent_total"] = sent_by_sender_total.get(email.strip().lower(), 0)
+    return {"accounts": accounts}
 
 
 def _template_http_error(exc: Exception) -> HTTPException:

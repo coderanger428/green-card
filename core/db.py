@@ -1,5 +1,5 @@
 """
-Shared SQLite access for scraper, dashboard, and drip mailer.
+Shared SQLite access for the scraper and the dashboard.
 
 Single shared DB at the repo root: app.db (WAL + busy_timeout).
 One file for every platform. launch.pids stays next to launch.py.
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS users (
     mail_status TEXT NOT NULL DEFAULT 'not_sent',
     social_status TEXT NOT NULL DEFAULT 'not_sent',
     sender_email TEXT NOT NULL DEFAULT '',
+    mail_template TEXT NOT NULL DEFAULT '',
     outcome TEXT NOT NULL DEFAULT 'Waiting',
     suppressed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -191,12 +192,6 @@ def init_db(result_dir: Path | None = None) -> Path:
     try:
         conn.executescript(SCHEMA_SQL)
         if conn.execute(
-            "SELECT value FROM app_meta WHERE key = 'drip_paused'"
-        ).fetchone() is None:
-            conn.execute(
-                "INSERT INTO app_meta (key, value) VALUES ('drip_paused', '0')"
-            )
-        if conn.execute(
             "SELECT value FROM app_meta WHERE key = 'scrape_paused'"
         ).fetchone() is None:
             conn.execute(
@@ -224,6 +219,7 @@ def init_db(result_dir: Path | None = None) -> Path:
         ensure_github_profile_columns(conn)
         ensure_outcome_column(conn)
         ensure_sender_email_column(conn)
+        ensure_mail_template_column(conn)
         drop_unused_outcome_columns(conn)
         ensure_suppressed_column(conn)
         ensure_suppressed_locations(conn)
@@ -611,6 +607,15 @@ def drop_unused_outcome_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users DROP COLUMN opened")
     if "replied" in columns:
         conn.execute("ALTER TABLE users DROP COLUMN replied")
+
+
+def ensure_mail_template_column(conn: sqlite3.Connection) -> None:
+    """Remember which template was used. Edited subject and body are not stored."""
+    if "mail_template" in _user_columns(conn):
+        return
+    conn.execute(
+        "ALTER TABLE users ADD COLUMN mail_template TEXT NOT NULL DEFAULT ''"
+    )
 
 
 def ensure_mail_sender_name(conn: sqlite3.Connection) -> None:
@@ -1068,7 +1073,7 @@ def _public_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any] | Non
         """
         SELECT id, email, name, display_name, link, github, github_bio, socials,
                location, country, source, mail_status, social_status, sender_email,
-               outcome, created_at, updated_at
+               mail_template, outcome, created_at, updated_at
         FROM users WHERE id = ?
         """,
         (int(user_id),),
@@ -1207,6 +1212,14 @@ def update_user_outcome(
     return row_to_dict(updated)
 
 
+def mail_template_name(value: str | None) -> str:
+    """Keep a template filename. Reject paths and anything that is not a name."""
+    name = (value or "").strip()
+    if not name or name != Path(name).name or len(name) > 200:
+        return ""
+    return name
+
+
 def set_user_contact(
     conn: sqlite3.Connection,
     user_id: int,
@@ -1215,6 +1228,7 @@ def set_user_contact(
     status: str,
     sender_email: str | None = None,
     social_url: str | None = None,
+    template: str | None = None,
 ) -> dict[str, Any] | None:
     """Record a manual email or one social link. Sent mail stores the sender."""
     kind = (channel or "").strip().lower()
@@ -1252,14 +1266,33 @@ def set_user_contact(
         sender = (sender_email or "").strip()
         if value == "sent" and not sender:
             raise ValueError("Sender is required")
+        template_name = mail_template_name(template)
         if value == "sent":
             conn.execute(
                 """
                 UPDATE users
-                SET mail_status = ?, sender_email = ?, updated_at = ?
+                SET mail_status = ?, sender_email = ?, mail_template = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (value, sender, now, int(user_id)),
+                (value, sender, template_name, now, int(user_id)),
+            )
+        elif value == "failed" and template_name:
+            conn.execute(
+                """
+                UPDATE users
+                SET mail_status = ?, mail_template = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (value, template_name, now, int(user_id)),
+            )
+        elif value == "not_sent":
+            conn.execute(
+                """
+                UPDATE users
+                SET mail_status = ?, mail_template = '', updated_at = ?
+                WHERE id = ?
+                """,
+                (value, now, int(user_id)),
             )
         else:
             conn.execute(
@@ -1366,14 +1399,6 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def is_drip_paused(conn: sqlite3.Connection) -> bool:
-    return get_meta(conn, "drip_paused", "0") in ("1", "true", "True", "yes")
-
-
-def set_drip_paused(conn: sqlite3.Connection, paused: bool) -> None:
-    set_meta(conn, "drip_paused", "1" if paused else "0")
-
-
 def is_scrape_paused(conn: sqlite3.Connection) -> bool:
     return get_meta(conn, "scrape_paused", "0") in ("1", "true", "True", "yes")
 
@@ -1476,176 +1501,6 @@ def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     return {k: row[k] for k in row.keys()}
-
-
-# --- Queue helpers ---
-
-# Corporate / platform domains we never cold-email (exact or subdomain).
-# Consumer inboxes (gmail, qq, pm.me, hey.com, …) are allowed by default.
-BLOCKED_EMAIL_DOMAINS = frozenset(
-    {
-        # Forem / Dev.to / Linux Foundation–adjacent
-        "dev.to",
-        "linux.com",
-        "kernel.org",
-        # Big tech / cloud / SaaS seen in this DB
-        "amazon.com",
-        "apache.org",
-        "adobe.com",
-        "atlassian.com",
-        "cisco.com",
-        "datadoghq.com",
-        "elastic.co",
-        "github.com",
-        "gitlab.com",
-        "google.com",
-        "ibm.com",
-        "intel.com",
-        "jetbrains.com",
-        "linkedin.com",
-        "microsoft.com",
-        "mongodb.com",
-        "nutanix.com",
-        "oracle.com",
-        "redhat.com",
-        "salesforce.com",
-        "shopify.com",
-    }
-)
-
-
-def _email_domain(email: str | None) -> str:
-    text = (email or "").strip().lower()
-    if not text or "@" not in text:
-        return ""
-    return text.rsplit("@", 1)[1].strip()
-
-
-def is_blocked_email(email: str | None) -> bool:
-    """True for empty/invalid addresses or denylisted corporate domains."""
-    domain = _email_domain(email)
-    if not domain:
-        return True
-    if domain in BLOCKED_EMAIL_DOMAINS:
-        return True
-    # Block corporate subdomains (e.g. ca.ibm.com) but not lookalikes
-    # (e.g. notmicrosoft.com).
-    return any(domain.endswith(f".{blocked}") for blocked in BLOCKED_EMAIL_DOMAINS)
-
-
-def can_enqueue_email(email: str | None) -> bool:
-    return not is_blocked_email(email)
-
-
-# Back-compat alias used by older call sites/tests.
-def is_personal_email(email: str | None) -> bool:
-    return can_enqueue_email(email)
-
-
-def enqueue_users(conn: sqlite3.Connection, user_ids: list[int]) -> dict[str, int]:
-    """Add users to queue. Skips already sent/queued and blocked company domains."""
-    counts = {
-        "queued": 0,
-        "skipped_sent": 0,
-        "skipped_queued": 0,
-        "skipped_blocked": 0,
-        "skipped_non_personal": 0,  # alias of skipped_blocked (legacy UI)
-        "skipped_suppressed": 0,
-        "missing": 0,
-    }
-    now = utc_now()
-    for uid in user_ids:
-        row = conn.execute(
-            "SELECT id, email, mail_status, suppressed FROM users WHERE id = ?", (uid,)
-        ).fetchone()
-        if row is None:
-            counts["missing"] += 1
-            continue
-        if int(row["suppressed"] or 0):
-            counts["skipped_suppressed"] += 1
-            continue
-        status = (row["mail_status"] or "").lower()
-        if status == "sent":
-            counts["skipped_sent"] += 1
-            continue
-        if status == "queued":
-            counts["skipped_queued"] += 1
-            continue
-        if is_blocked_email(row["email"]):
-            counts["skipped_blocked"] += 1
-            counts["skipped_non_personal"] += 1
-            continue
-        existing_q = conn.execute(
-            "SELECT id, status FROM queue_items WHERE user_id = ?", (uid,)
-        ).fetchone()
-        if existing_q and existing_q["status"] in ("queued", "sending"):
-            counts["skipped_queued"] += 1
-            continue
-        if existing_q:
-            conn.execute("DELETE FROM queue_items WHERE user_id = ?", (uid,))
-        conn.execute(
-            """
-            INSERT INTO queue_items (user_id, status, queued_at, sent_at, template, subject, error)
-            VALUES (?, 'queued', ?, NULL, '', '', '')
-            """,
-            (uid, now),
-        )
-        conn.execute(
-            "UPDATE users SET mail_status = 'queued', updated_at = ? WHERE id = ?",
-            (now, uid),
-        )
-        counts["queued"] += 1
-    return counts
-
-
-def dequeue_users(conn: sqlite3.Connection, user_ids: list[int]) -> int:
-    """Remove from queue if not yet sent; reset mail_status to not_sent (or failed if last was failed)."""
-    removed = 0
-    now = utc_now()
-    for uid in user_ids:
-        q = conn.execute(
-            "SELECT id, status FROM queue_items WHERE user_id = ?", (uid,)
-        ).fetchone()
-        if q is None or q["status"] not in ("queued",):
-            continue
-        conn.execute("DELETE FROM queue_items WHERE id = ?", (int(q["id"]),))
-        conn.execute(
-            "UPDATE users SET mail_status = 'not_sent', updated_at = ? WHERE id = ?",
-            (now, uid),
-        )
-        removed += 1
-    return removed
-
-
-def count_sent_today(conn: sqlite3.Connection, day_prefix: str) -> int:
-    """Count sent mails for the Tokyo day represented by day_prefix."""
-    rows = conn.execute(
-        "SELECT sent_at FROM queue_items WHERE status = 'sent' AND sent_at IS NOT NULL"
-    ).fetchall()
-    target_day = day_prefix
-    count = 0
-    for row in rows:
-        sent_at = row["sent_at"]
-        if not sent_at:
-            continue
-        try:
-            parsed = datetime.fromisoformat(sent_at)
-        except ValueError:
-            parsed = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=TOKYO_TZ)
-        else:
-            parsed = parsed.astimezone(TOKYO_TZ)
-        if parsed.strftime("%Y-%m-%d") == target_day:
-            count += 1
-    return count
-
-
-def count_sent_total(conn: sqlite3.Connection) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM queue_items WHERE status = 'sent'"
-    ).fetchone()
-    return int(row["n"])
 
 
 def _created_on_tokyo_day(created_at: str | None, day_prefix: str) -> bool:
@@ -1781,156 +1636,12 @@ def seconds_until_next_tokyo_midnight(now: datetime | None = None) -> float:
     return max(1.0, (tomorrow - now).total_seconds())
 
 
-def next_queued_item(conn: sqlite3.Connection) -> dict[str, Any] | None:
-    row = conn.execute(
-        """
-        SELECT q.id AS queue_id, q.user_id, q.status, q.queued_at, q.error,
-               u.email, u.name, u.display_name, u.link, u.location, u.country
-        FROM queue_items q
-        JOIN users u ON u.id = q.user_id
-        WHERE q.status = 'queued'
-        ORDER BY q.queued_at ASC, q.id ASC
-        LIMIT 1
-        """
-    ).fetchone()
-    return row_to_dict(row)
-
-
-def list_queued_items(
-    conn: sqlite3.Connection, *, limit: int = 500
-) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT q.id AS queue_id, q.user_id, q.status, q.queued_at, q.error,
-               u.email, u.name, u.display_name, u.link, u.location, u.country
-        FROM queue_items q
-        JOIN users u ON u.id = q.user_id
-        WHERE q.status = 'queued'
-        ORDER BY q.queued_at ASC, q.id ASC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
-    ).fetchall()
-    return [row_to_dict(r) for r in rows]
-
-
-def mark_queue_sending(
-    conn: sqlite3.Connection,
-    queue_id: int,
-    sender_email: str = '',
-) -> None:
-    conn.execute(
-        "UPDATE queue_items SET status = 'sending', sender_email = ? WHERE id = ?",
-        (sender_email or '', queue_id),
-    )
-
-
-def requeue_stuck_sending(conn: sqlite3.Connection) -> int:
-    """Return in-flight rows to queued after a crash or power-off mid-send."""
-    rows = conn.execute(
-        "SELECT id, user_id FROM queue_items WHERE status = 'sending'"
-    ).fetchall()
-    n = 0
-    for row in rows:
-        mark_queue_requeue(
-            conn,
-            int(row["id"]),
-            int(row["user_id"]),
-            error="requeued: send interrupted (process stopped)",
-        )
-        n += 1
-    return n
-
-
-def mark_queue_requeue(
-    conn: sqlite3.Connection,
-    queue_id: int,
-    user_id: int,
-    *,
-    error: str = "",
-) -> None:
-    """Put a sending item back on the queue (e.g. SMTP DNS outage pause)."""
-    now = utc_now()
-    conn.execute(
-        """
-        UPDATE queue_items
-        SET status = 'queued', sender_email = '', template = '', subject = '', error = ?
-        WHERE id = ?
-        """,
-        (error or "", queue_id),
-    )
-    conn.execute(
-        "UPDATE users SET mail_status = 'queued', updated_at = ? WHERE id = ?",
-        (now, user_id),
-    )
-
-
-def mark_queue_sent(
-    conn: sqlite3.Connection,
-    queue_id: int,
-    user_id: int,
-    template: str,
-    subject: str,
-) -> None:
-    now = utc_now()
-    conn.execute(
-        """
-        UPDATE queue_items
-        SET status = 'sent', sent_at = ?, template = ?, subject = ?, error = ''
-        WHERE id = ?
-        """,
-        (now, template, subject, queue_id),
-    )
-    conn.execute(
-        """
-        UPDATE users
-        SET mail_status = 'sent',
-            sender_email = COALESCE(
-                (
-                    SELECT NULLIF(TRIM(sender_email), '')
-                    FROM queue_items
-                    WHERE id = ?
-                ),
-                sender_email
-            ),
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (queue_id, now, user_id),
-    )
-
-
-def mark_queue_failed(
-    conn: sqlite3.Connection,
-    queue_id: int,
-    user_id: int,
-    template: str,
-    subject: str,
-    error: str,
-) -> None:
-    now = utc_now()
-    conn.execute(
-        """
-        UPDATE queue_items
-        SET status = 'failed', sent_at = ?, template = ?, subject = ?, error = ?
-        WHERE id = ?
-        """,
-        (now, template, subject, error, queue_id),
-    )
-    conn.execute(
-        "UPDATE users SET mail_status = 'failed', updated_at = ? WHERE id = ?",
-        (now, user_id),
-    )
-
-
 def computed_mail_cap(
     created_at: str,
     *,
     now: datetime | None = None,
 ) -> int:
-    """Daily send cap from Tokyo *calendar* age of the account (not rolling 24h).
-
-    Cap tiers advance at Tokyo midnight together with the sent-today counter.
+    """Daily cap from Tokyo calendar age of the account (not rolling 24h).
     The create calendar day *and* the following Tokyo day stay at 10, so an
     account added on Aug 10 keeps cap 10 through Aug 11 and becomes 20 at
     midnight Aug 11→12:
@@ -1994,57 +1705,6 @@ def get_active_daily_cap_sum(
         "SELECT created_at FROM mail_accounts WHERE active = 1"
     ).fetchall()
     return sum(computed_mail_cap(str(row["created_at"]), now=now) for row in rows)
-
-
-def _tokyo_day_reference(day_prefix: str, *, default_now: datetime | None = None) -> datetime:
-    if not day_prefix:
-        if default_now is None:
-            default_now = datetime.now(TOKYO_TZ)
-        return default_now if default_now.tzinfo is not None else default_now.replace(tzinfo=TOKYO_TZ)
-    try:
-        value = datetime.strptime(day_prefix, "%Y-%m-%d")
-    except ValueError:
-        if default_now is None:
-            default_now = datetime.now(TOKYO_TZ)
-        value = default_now
-    return value.replace(tzinfo=TOKYO_TZ)
-
-
-def get_next_active_mail_account(
-    conn: sqlite3.Connection,
-    day_prefix: str,
-) -> dict[str, Any] | None:
-    rows = conn.execute(
-        "SELECT id, email, app_password, sender_name, created_at FROM mail_accounts "
-        "WHERE active = 1 ORDER BY created_at ASC, id ASC"
-    ).fetchall()
-    if not rows:
-        return None
-
-    # Must use Tokyo-day counting (same as UI), not sent_at LIKE prefix —
-    # older UTC timestamps can fall on today's Tokyo date without matching the prefix.
-    counts = count_sent_by_sender_today(conn, day_prefix)
-    day_reference = _tokyo_day_reference(day_prefix)
-
-    # Fair share: among under-cap accounts, prefer the lowest sent_today
-    # (then oldest). Oldest-first alone lets an account whose cap just
-    # increased (e.g. 10→20) monopolize the queue while newer accounts
-    # sit under-filled for the rest of the day.
-    candidates: list[tuple[int, str, int, dict[str, Any]]] = []
-    for row in rows:
-        email = str(row["email"])
-        cap = computed_mail_cap(str(row["created_at"]), now=day_reference)
-        sent = int(counts.get(email, 0))
-        if sent >= cap:
-            continue
-        account = row_to_dict(row)
-        account["daily_cap"] = cap
-        candidates.append((sent, str(row["created_at"]), int(row["id"]), account))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-    return candidates[0][3]
 
 
 def upsert_mail_account(
@@ -2117,30 +1777,6 @@ def delete_mail_account(conn: sqlite3.Connection, email: str) -> bool:
     return result.rowcount > 0
 
 
-def count_sent_by_sender_today(conn: sqlite3.Connection, day_prefix: str) -> dict[str, int]:
-    rows = conn.execute(
-        "SELECT sender_email, sent_at FROM queue_items WHERE status = 'sent' AND sent_at IS NOT NULL AND sender_email != ''"
-    ).fetchall()
-    counts: dict[str, int] = {}
-    for row in rows:
-        sender_email = str(row["sender_email"])
-        sent_at = row["sent_at"]
-        if not sender_email or not sent_at:
-            continue
-        try:
-            parsed = datetime.fromisoformat(sent_at)
-        except ValueError:
-            parsed = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=TOKYO_TZ)
-        else:
-            parsed = parsed.astimezone(TOKYO_TZ)
-        if parsed.strftime("%Y-%m-%d") != day_prefix:
-            continue
-        counts[sender_email] = counts.get(sender_email, 0) + 1
-    return counts
-
-
 def count_sent_by_sender_total(conn: sqlite3.Connection) -> dict[str, int]:
     """Mails marked sent, grouped by the sender stored on the user."""
     rows = conn.execute(
@@ -2152,13 +1788,3 @@ def count_sent_by_sender_total(conn: sqlite3.Connection) -> dict[str, int]:
         """
     ).fetchall()
     return {str(r['sender_email']): int(r['n']) for r in rows}
-
-
-def queue_stats(conn: sqlite3.Connection) -> dict[str, int]:
-    rows = conn.execute(
-        "SELECT status, COUNT(*) AS n FROM queue_items GROUP BY status"
-    ).fetchall()
-    out = {s: 0 for s in QUEUE_STATUSES}
-    for r in rows:
-        out[str(r["status"])] = int(r["n"])
-    return out

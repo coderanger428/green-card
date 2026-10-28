@@ -79,15 +79,28 @@ class ManualContactTests(unittest.TestCase):
                 channel="email",
                 status="sent",
                 sender_email="from@gmail.com",
+                template="usa (1).txt",
             )
             self.assertEqual(saved["mail_status"], "sent")
             self.assertEqual(saved["sender_email"], "from@gmail.com")
+            self.assertEqual(saved["mail_template"], "usa (1).txt")
 
             failed = db.set_user_contact(
-                conn, user_id, channel="email", status="failed"
+                conn,
+                user_id,
+                channel="email",
+                status="failed",
+                template="eu (1).txt",
             )
             self.assertEqual(failed["mail_status"], "failed")
             self.assertEqual(failed["sender_email"], "from@gmail.com")
+            self.assertEqual(failed["mail_template"], "eu (1).txt")
+
+            cleared = db.set_user_contact(
+                conn, user_id, channel="email", status="not_sent", template="usa (1).txt"
+            )
+            self.assertEqual(cleared["mail_status"], "not_sent")
+            self.assertEqual(cleared["mail_template"], "")
         finally:
             conn.close()
 

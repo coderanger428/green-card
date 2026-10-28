@@ -1,9 +1,6 @@
 import os
-import random
 import re
-import smtplib
 import unicodedata
-from email.message import EmailMessage
 from pathlib import Path
 
 from mail.regions import (
@@ -33,24 +30,6 @@ def load_dotenv(path: str = ".env") -> None:
 
 
 load_dotenv()
-
-GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "").strip()
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
-
-_sender_emails = [
-    email.strip()
-    for email in os.environ.get("SENDER_EMAILS", "").split(",")
-    if email.strip()
-]
-SENDER_EMAILS = _sender_emails or ([GMAIL_ADDRESS] if GMAIL_ADDRESS else [])
-
-
-def choose_sender() -> str:
-    if not SENDER_EMAILS:
-        raise ValueError(
-            "No sender address is configured. Set SENDER_EMAILS or GMAIL_ADDRESS."
-        )
-    return random.choice(SENDER_EMAILS)
 
 
 def region_from_filename(filename: str) -> str:
@@ -263,60 +242,61 @@ def region_for_country(country: str) -> str:
     return schedule_region_for_country(country)
 
 
+def _item_region(item: dict[str, str]) -> str:
+    raw = item.get("region") or ""
+    try:
+        return canonical_template_region(raw)
+    except ValueError:
+        return raw
+
+
+def choose_template(
+    template_pool: list[dict[str, str]],
+    country: str,
+    filename: str = "",
+) -> dict[str, str]:
+    """First file for the requested name, else the first location match.
+
+    Location order is country file, then named region, then Other.
+    Among matches, the lowest filename wins (`usa (1).txt` before `usa (2).txt`).
+    """
+    wanted = (filename or "").strip()
+    if wanted:
+        for item in template_pool:
+            if item.get("filename") == wanted:
+                return item
+
+    def item_region(item: dict[str, str]) -> str:
+        return _item_region(item)
+
+    region = select_template_region(country, (item_region(item) for item in template_pool))
+    choices = [item for item in template_pool if item_region(item) == region]
+    if not choices:
+        choices = [item for item in template_pool if item.get("region") == FALLBACK_REGION]
+    if not choices:
+        choices = list(template_pool)
+    return sorted(choices, key=lambda item: item.get("filename") or "")[0]
+
+
+def render_message(
+    template: dict[str, str],
+    name: str,
+    your_name: str,
+    link: str,
+) -> tuple[str, str, str]:
+    subject = render_template_text(template["subject"], name, your_name, link)
+    body = render_template_text(template["body"], name, your_name, link)
+    return template["filename"], subject, body
+
+
 def pick_message(
     template_pool: list[dict[str, str]],
     country: str,
     name: str,
     your_name: str,
     link: str,
+    filename: str = "",
 ) -> tuple[str, str, str]:
-    """Select a template by country, then named region (EU/APAC/…), then Other."""
-    def item_region(item: dict[str, str]) -> str:
-        raw = item.get("region") or ""
-        try:
-            return canonical_template_region(raw)
-        except ValueError:
-            return raw
-
-    region = select_template_region(country, (item_region(item) for item in template_pool))
-    choices = [item for item in template_pool if item_region(item) == region]
-    if not choices:
-        fallback = [item for item in template_pool if item.get("region") == FALLBACK_REGION]
-        template = random.choice(fallback or template_pool)
-    else:
-        template = random.choice(choices)
-
-    subject = render_template_text(template["subject"], name, your_name, link)
-    body = render_template_text(template["body"], name, your_name, link)
-    return template["filename"], subject, body
-
-
-
-
-def build_message(
-    from_email: str, to_email: str, subject: str, body: str
-) -> EmailMessage:
-    """Build a plain-text email (templates are .txt; no HTML/Markdown)."""
-    msg = EmailMessage()
-    msg["From"] = from_email
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.set_content(body)
-    return msg
-
-
-def send_email(
-    smtp: smtplib.SMTP_SSL, from_email: str, to_email: str, subject: str, body: str
-) -> None:
-    smtp.send_message(build_message(from_email, to_email, subject, body))
-
-
-def main() -> None:
-    raise RuntimeError(
-        "Direct CSV batch sending is deprecated. "
-        "Use the dashboard queue to enqueue users and send mail from SQLite."
-    )
-
-
-if __name__ == "__main__":
-    main()
+    """Render one template. Default is the first file that matches the country."""
+    template = choose_template(template_pool, country, filename)
+    return render_message(template, name, your_name, link)

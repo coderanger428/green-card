@@ -1,30 +1,46 @@
 # Dev.to scraper + mail dashboard
 
-Local pipeline that scrapes Dev.to users, enriches public GitHub emails, stores contacts in SQLite, and drip-sends plain-text outreach mail from a small web dashboard.
+`start.bat` / `start.sh` call `launch.py`. That process starts the Dev.to scraper and the dashboard on port 8007. Both read and write one SQLite file, `app.db`.
 
-Three pieces share one SQLite database (`app.db` at the repo root, WAL mode):
+```mermaid
+flowchart TB
+  scripts["start.bat / start.sh"] --> launch["launch.py"]
+  launch --> scraper["scrapers/devto"]
+  launch --> dashboard["server/dashboard.py :8007"]
 
-| Piece | Role |
+  devto["Dev.to API"] --> scraper
+  github["GitHub API"] --> scraper
+  scraper --> locations["core/locations.py"]
+  scraper --> enrich["core/github_enrich.py"]
+  scraper --> db[("app.db")]
+  enrich --> db
+
+  dashboard --> db
+  dashboard --> mail["mail/ + templates/"]
+  dashboard --> ui["frontend/dist"]
+
+  ui --> shell["Shell"]
+  shell --> pool["Pool"]
+  shell --> scraperview["Scraper"]
+  shell --> templatesview["Templates"]
+  shell --> settings["Settings"]
+  pool --> modal["Contact modal"]
+```
+
+| Path | What it owns |
 | --- | --- |
-| **Scraper** (`scrapers/devto/`) | Walks Dev.to user IDs, maps location → country, looks up public GitHub email, saves users |
-| **Dashboard** (`server/dashboard.py`) | FastAPI API + drip worker; also serves the built React UI |
-| **UI** (`frontend/`) | Raw and Tracked users, scrape control, Gmail senders, templates, and the send queue |
-| **Shared store** (`core/`) | SQLite (`db.py`) and country detection (`locations.py`), used by the scraper and the dashboard |
-| **Mail** (`mail/`) | Templates and regions (`regions.py`), Tokyo drip pacing (`schedule.py`), SMTP (`send.py`) |
+| `launch.py` | Starts `scrapers.devto` and uvicorn. Does not start a mail sender. |
+| `scrapers/devto/` | Walks Dev.to user ids, normalizes location, stores a GitHub profile when the token allows it. |
+| `core/db.py` | Users, contact status, sender addresses, scrape position, and the GitHub token. |
+| `core/github_enrich.py` | Token lookup, profile fields, and which hosts are social links. |
+| `core/locations.py` | Place formatting and excluded countries. |
+| `server/dashboard.py` | HTTP API and the built UI. |
+| `mail/` | Renders `[Name]`, `[Your Name]`, and `[Link]` from `templates/*.txt`. |
+| `frontend/src/app/` | Dashboard state and HTTP calls. |
+| `frontend/src/features/` | Pool, Scraper, Templates, and Settings. The email and social modals live under Pool. |
+| `exclude-regions.txt` | Country slugs the scraper will not save. |
 
-`launch.py` stays at the repo root. `start.bat` and `start.sh` call it, and it starts every scraper in `scrapers/` plus the dashboard. `exclude-regions.txt`, `templates/`, and `app.db` stay at the root. `launch.pids` sits next to `launch.py`.
-
-`app.db` is one database for every platform. Contacts, the send queue, and Gmail accounts are shared. Each scraper’s own settings live in `scraper_parameter` as a JSON object keyed by platform id. Dev.to stores `{"last_id": ...}` there and resumes from that number, not from a user row. The dashboard’s user total is a count of `users`.
-
-A saved profile URL is written onto `users.link` when the person is found. The Source column shows the platform’s display name (`devto` → dev.to). The link tooltip is the saved URL. Tracked mail results use `users.outcome`: Waiting, Replied, or Rejected.
-
-Mail is **plain text** only. Templates live under `templates/` as `.txt` files.
-
-```
-Dev.to / GitHub  →  scraper  →  SQLite  ←  dashboard drip worker  →  Gmail SMTP
-                                      ↑
-                                 React UI (:8007)
-```
+The GitHub token and each sender’s name are rows in `app.db`, edited on Settings. `app.db` stays on disk and is not part of the git history.
 
 ## Initial setup
 
@@ -92,14 +108,14 @@ register-login.bat
 
 That writes a script into this Windows user’s Startup folder. Five minutes after sign-in, it runs this copy’s `start.bat`. Sign-in is the session Windows opens after power-on. No admin rights. Undo with `register-login.bat remove`. Takes effect on the **next** sign-in.
 
-### 7. Add a Gmail sender
+### 7. Add a sender
 
 1. In the UI, open **Settings**
 2. **Add account**
-3. Gmail address + [App password](https://support.google.com/accounts/answer/185833) (not your normal login password)
+3. Gmail address and the name that should fill `[Your Name]`
 4. Save
 
-Accounts live in SQLite with per-account daily caps that ramp by **Tokyo calendar age** (tiers change at Tokyo midnight). The drip worker only uses **active** accounts that still have remaining daily capacity.
+Account age still sets the scrape cap. Tokyo calendar age raises each account’s cap at Tokyo midnight, and the scraper idles once today’s located saves reach that budget.
 
 ## Email templates
 
@@ -114,38 +130,26 @@ Plain-text files in `templates/`. Manage them on the **Templates** page, or edit
 
 **Countries** use the country name: `japan`, `usa`, `india`, `germany`. Typing `ja` / `jp` or `us` is treated as `japan` / `usa`.
 
-At send time the drip worker picks the first match that has files: country file → named region → Other. Add APAC once and Asian/Pacific countries use it unless a country file exists.
+The mail modal picks the first match that has files: country file → named region → Other. Add APAC once and Asian/Pacific countries use it unless a country file exists.
 
 The dashboard reloads templates from disk after you save in the UI.
 
 ## Exclude countries
 
-`exclude-regions.txt` is a hand-edited skip list (one country slug per line). The scraper will not save those countries, the dashboard hides them, and matching users are deleted from SQLite (including queue rows).
+`exclude-regions.txt` is a hand-edited skip list (one country slug per line). The scraper will not save those countries, the dashboard hides them, and matching users are deleted from SQLite.
 
 Tiny countries that already had **fewer than 10** users were seeded here once. New small countries are **not** auto-added — otherwise they could never grow. Add a slug in the file (`iceland`, or a named region such as `eu` to drop every EU country), or click **−** next to a country in the Users sidebar. `#` starts a comment. `noloc` is not a country; do not list it.
 
 Edits are picked up while scrape/dashboard are running.
 
-## How to send mail
+## How to contact someone
 
 1. **Scrape** — keep the app running so users accumulate. Dev.to resumes from its `last_id` parameter. Pause or change the daily located-save cap on the **Scraper** page.
-2. **Settings** — at least one active Gmail account.
-3. **Settings** — set the name on each sender address. That name fills `[Your Name]`.
-4. **Raw** — contacts not yet sent. Country sidebar, or All countries, search, edit the greeting, select rows. **Suppress** hides a person from the pools and keeps the email so a later scrape cannot add them again.
-5. **Enqueue** — add selected Raw users. Blocked company domains are skipped.
-6. **Drip** runs while the dashboard is up (unless paused):
-   - Queue is FIFO (oldest queued first)
-   - **Tokyo midnight** starts a new mail day (caps + sent-today reset)
-   - Remaining daily cap is **spread until Tokyo midnight** (a 50/day cap is ~29 minutes between sends at the start of the day; leftover cap after downtime is sent faster so it still finishes before midnight)
-   - Overflow waits for the next Tokyo day
-   - Template match as above; plain-text SMTP
-7. **Pause / resume** drip in the UI without stopping the server.
-8. **Tracked** — people already sent. Set outcome to Waiting, Replied, or Rejected. The greeting is fixed after send.
-9. **Monitor** queue, sent/failed, and “sent today” on the dashboard.
+2. **Settings** — add each sender address and the name that fills `[Your Name]`.
+3. **Pool** — pick a country, or search by name or email. Open an email or a social icon, copy the rendered message, and mark it Sent, Failed, or Clear.
+4. **Suppress** hides a person from the pool and keeps the email so a later scrape cannot add them again.
 
-The queue is in SQLite. If the PC is off for a few hours, nobody is dropped; on restart, leftover cap is paced over the rest of that Tokyo day. Unused cap does not carry past midnight.
-
-Failed sends keep an error on the queue item. SMTP DNS outages pause drip and requeue the current message until `smtp.gmail.com` resolves again.
+Mail is sent by hand. The dashboard does not queue or send messages.
 
 ### Scrape throttle
 
@@ -153,13 +157,11 @@ The scraper stays running but **idles** when today’s **located** saves (countr
 
 `floor(1.5 × sum of active Gmail daily caps)`
 
-Set an absolute cap (or pause scraping) from the **Scraper** page. Saves tagged `noloc` still happen but **do not** count toward the budget. Mail keeps sending while scrape sleeps until the next Tokyo midnight, or until you raise the cap. Override the auto ratio with `SCRAPE_MAIL_CAP_RATIO` (default `1.5`) when cap mode is Auto.
+Set an absolute cap (or pause scraping) from the **Scraper** page. Saves tagged `noloc` still happen but **do not** count toward the budget. Override the auto ratio with `SCRAPE_MAIL_CAP_RATIO` (default `1.5`) when cap mode is Auto.
 
 ### Optional env knobs
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `MAIL_DAILY_LIMIT` | `20` | Fallback daily cap if no account caps apply |
-| `MAIL_DRIP_DELAY_MIN` | `30` | Floor between sends when the Tokyo day still has room (seconds). The gap grows so leftover cap lasts until midnight. |
-| `MAIL_DNS_RETRY_DELAY` | `30` | Wait between SMTP DNS retries when paused |
 | `SCRAPE_MAIL_CAP_RATIO` | `1.5` | Auto scrape cap = ratio × active mail caps (dashboard can override with a manual daily cap) |

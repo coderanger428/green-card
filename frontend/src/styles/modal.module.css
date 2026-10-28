@@ -105,6 +105,24 @@
   margin-bottom: 14px;
 }
 
+.mail-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.mail-field-row label {
+  min-width: 0;
+  margin-bottom: 14px;
+}
+
+.mail-modal .copy-row input,
+.mail-modal .copy-row textarea {
+  width: auto;
+  margin-top: 0;
+  background: #ffffff;
+}
+
 .mail-modal input[type='email'],
 .mail-modal input[type='password'],
 .mail-modal input[type='text'],
@@ -118,12 +136,6 @@
   background: #f9fbff;
   color: #1f2937;
   font: inherit;
-}
-
-.mail-modal .copy-row input,
-.mail-modal .copy-row textarea {
-  width: auto;
-  margin-top: 0;
 }
 
 .mail-modal-overlay {

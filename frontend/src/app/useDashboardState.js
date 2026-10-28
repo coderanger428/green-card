@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { POLL_INTERVAL_MS, QUEUE_PAGE_SIZE } from '../lib/constants';
+import { POLL_INTERVAL_MS } from '../lib/constants';
 import { maskEmail, formatCountryName, formatGroupMatchHint } from '../lib/format';
 import { SCRAPERS } from '../lib/source';
 import { SOCIAL_ACCOUNT_FILTERS, emptySocialFilters, socialProviderLabel } from '../lib/social';
+import { renderTemplateText, senderDisplayName } from '../lib/templateText';
 
 export function useDashboardState() {
   const [view, setView] = useState('pool');
@@ -18,17 +19,10 @@ export function useDashboardState() {
   const [pageSize] = useState(50);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [overview, setOverview] = useState(null);
+  const mailPreviewSeq = useRef(0);
   const [mailAccounts, setMailAccounts] = useState(null);
-  const [queueItems, setQueueItems] = useState([]);
-  const [queuePage, setQueuePage] = useState(1);
-  const [queueTotal, setQueueTotal] = useState(0);
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [selectedQueueIds, setSelectedQueueIds] = useState(new Set());
   const [mailEmail, setMailEmail] = useState('');
   const [mailSenderName, setMailSenderName] = useState('');
-  const [mailAppPassword, setMailAppPassword] = useState('');
-  const [mailActive, setMailActive] = useState(true);
   const [mailSaveMode, setMailSaveMode] = useState('create');
   const [mailModalOpen, setMailModalOpen] = useState(false);
   const [scraperInfo, setScraperInfo] = useState(null);
@@ -55,48 +49,11 @@ export function useDashboardState() {
   const [templateSubject, setTemplateSubject] = useState('');
   const [templateBody, setTemplateBody] = useState('');
 
-  const refreshOverview = () => {
-    fetch('/api/overview')
-      .then((res) => res.json())
-      .then(setOverview)
-      .catch((err) => setError(`Unable to load overview: ${err.message}`));
-  };
-
   const loadMailAccounts = () => {
     fetch('/api/mail-accounts')
       .then((res) => res.json())
       .then(setMailAccounts)
       .catch((err) => setError(`Unable to load mail accounts: ${err.message}`));
-  };
-
-  const loadQueueItems = () => {
-    const params = new URLSearchParams({
-      page: String(queuePage),
-      page_size: String(QUEUE_PAGE_SIZE),
-    });
-    fetch(`/api/queue?${params.toString()}`)
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) {
-          const detail = data.detail || res.statusText;
-          throw new Error(typeof detail === 'string' ? detail : 'Request failed');
-        }
-        return data;
-      })
-      .then((data) => {
-        const items = data.items || [];
-        const total = Number(data.total) || 0;
-        const apiPage = Number(data.page) || 1;
-        if (apiPage !== queuePage) {
-          setQueuePage(apiPage);
-        }
-        setQueueItems(items);
-        setQueueTotal(total);
-        if (data.overview) {
-          setOverview(data.overview);
-        }
-      })
-      .catch((err) => setError(`Unable to load queue: ${err.message}`));
   };
 
   const applyScraperInfo = (data) => {
@@ -166,7 +123,6 @@ export function useDashboardState() {
   };
 
   useEffect(() => {
-    refreshOverview();
     loadCountries();
   }, []);
 
@@ -233,28 +189,21 @@ export function useDashboardState() {
     if (view === 'senders') {
       loadMailAccounts();
     }
-    if (view === 'queue') {
-      loadQueueItems();
-    }
     if (view === 'scraper') {
       loadScraperInfo();
     }
     if (view === 'templates') {
       loadTemplates();
     }
-  }, [view, queuePage]);
+  }, [view]);
 
   useEffect(() => {
     const poll = () => {
       if (typeof document !== 'undefined' && document.hidden) {
         return;
       }
-      refreshOverview();
       if (view === 'senders') {
         loadMailAccounts();
-      }
-      if (view === 'queue') {
-        loadQueueItems();
       }
       if (view === 'pool' || view === 'tracked') {
         loadCountries();
@@ -281,29 +230,14 @@ export function useDashboardState() {
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [view, selectedCountry, query, page, pageSize, queuePage, capDirty, socialFilters]);
+  }, [view, selectedCountry, query, page, pageSize, capDirty, socialFilters]);
 
-  const queueCount = overview?.queued ?? 0;
   const searchQuery = query.trim();
   const isGlobalSearch = !selectedCountry && searchQuery.length >= 2;
   const showUserTable = Boolean(selectedCountry) || isGlobalSearch;
-  const canAddToQueue = selectedIds.size > 0;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const queuePageCount = Math.max(1, Math.ceil(queueTotal / QUEUE_PAGE_SIZE));
-  const queueFrom =
-    queueTotal === 0 ? 0 : (queuePage - 1) * QUEUE_PAGE_SIZE + 1;
-  const queueTo = Math.min(queuePage * QUEUE_PAGE_SIZE, queueTotal);
-  const pageUserIds = users.map((user) => user.id);
-  const selectedOnPageCount = pageUserIds.filter((id) => selectedIds.has(id)).length;
-  const allPageSelected =
-    pageUserIds.length > 0 && selectedOnPageCount === pageUserIds.length;
-  const somePageSelected =
-    selectedOnPageCount > 0 && selectedOnPageCount < pageUserIds.length;
   const mailAccountsData = mailAccounts || {};
   const accounts = mailAccountsData.accounts || [];
-  const totalSent = mailAccountsData.total_sent ?? 0;
-  const sentToday = mailAccountsData.sent_today ?? 0;
-  const dailyLimit = mailAccountsData.daily_limit ?? 0;
   const sortedCountries = [...countries].sort(
     (a, b) => (b.count || 0) - (a.count || 0) || String(a.country).localeCompare(String(b.country))
   );
@@ -356,8 +290,6 @@ export function useDashboardState() {
   const handleResetMailForm = () => {
     setMailEmail('');
     setMailSenderName('');
-    setMailAppPassword('');
-    setMailActive(true);
     setMailSaveMode('create');
   };
 
@@ -370,8 +302,6 @@ export function useDashboardState() {
   const openEditMailModal = (account) => {
     setMailEmail(account.email || '');
     setMailSenderName(account.sender_name || '');
-    setMailAppPassword('');
-    setMailActive(Boolean(account.active));
     setMailSaveMode('update');
     setMailModalOpen(true);
   };
@@ -379,112 +309,6 @@ export function useDashboardState() {
   const closeMailModal = () => {
     setMailModalOpen(false);
     handleResetMailForm();
-  };
-
-  const handleToggleSelect = (id) => {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
-
-  const handleToggleSelectPage = () => {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      const ids = users.map((user) => user.id);
-      if (ids.length === 0) {
-        return next;
-      }
-      const allSelected = ids.every((id) => next.has(id));
-      if (allSelected) {
-        ids.forEach((id) => next.delete(id));
-      } else {
-        ids.forEach((id) => next.add(id));
-      }
-      return next;
-    });
-  };
-
-  const removableQueueItems = queueItems.filter((item) => item.status === 'queued');
-  const removableQueueIds = removableQueueItems.map((item) => item.user_id);
-  const allQueueSelected =
-    removableQueueIds.length > 0 &&
-    removableQueueIds.every((id) => selectedQueueIds.has(id));
-  const someQueueSelected =
-    !allQueueSelected && removableQueueIds.some((id) => selectedQueueIds.has(id));
-  const canRemoveFromQueue = selectedQueueIds.size > 0 && !loading;
-
-  const handleToggleQueueSelect = (userId) => {
-    setSelectedQueueIds((current) => {
-      const next = new Set(current);
-      if (next.has(userId)) {
-        next.delete(userId);
-      } else {
-        next.add(userId);
-      }
-      return next;
-    });
-  };
-
-  const handleToggleSelectQueuePage = () => {
-    setSelectedQueueIds((current) => {
-      const next = new Set(current);
-      if (removableQueueIds.length === 0) {
-        return next;
-      }
-      if (allQueueSelected) {
-        removableQueueIds.forEach((id) => next.delete(id));
-      } else {
-        removableQueueIds.forEach((id) => next.add(id));
-      }
-      return next;
-    });
-  };
-
-  const handleRemoveFromQueue = () => {
-    if (!selectedQueueIds.size) {
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    fetch('/api/queue/remove', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_ids: Array.from(selectedQueueIds) }),
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then((body) => {
-            throw new Error(body.detail || `HTTP ${res.status}`);
-          });
-        }
-        return res.json();
-      })
-      .then((data) => {
-        const removed = data.removed || 0;
-        toast.success(
-          `Removed ${removed} user${removed === 1 ? '' : 's'} from the queue.`
-        );
-        setSelectedQueueIds(new Set());
-        if (data.overview) {
-          setOverview(data.overview);
-        } else {
-          refreshOverview();
-        }
-        loadQueueItems();
-      })
-      .catch((err) => {
-        const message = `Unable to remove from queue: ${err.message}`;
-        setError(message);
-        toast.error(message);
-      })
-      .finally(() => setLoading(false));
   };
 
   const handleAddMailAccount = () => {
@@ -517,7 +341,6 @@ export function useDashboardState() {
         toast.success(isEditMode ? 'Mail account updated.' : 'Mail account added.');
         closeMailModal();
         loadMailAccounts();
-        refreshOverview();
       })
       .catch((err) => {
         const message = `Unable to save mail account: ${err.message}`;
@@ -550,56 +373,9 @@ export function useDashboardState() {
         toast.success(`Deleted ${maskEmail(trimmedMailEmail)}.`);
         closeMailModal();
         loadMailAccounts();
-        refreshOverview();
       })
       .catch((err) => {
         const message = `Unable to delete mail account: ${err.message}`;
-        setError(message);
-        toast.error(message);
-      })
-      .finally(() => setLoading(false));
-  };
-
-  const handleAddToQueue = () => {
-    if (!selectedIds.size) {
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    fetch('/api/queue/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_ids: Array.from(selectedIds) }),
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then((body) => {
-            throw new Error(body.detail || `HTTP ${res.status}`);
-          });
-        }
-        return res.json();
-      })
-      .then((data) => {
-        const counts = data.counts || {};
-        const queued = counts.queued || 0;
-        const skippedBlocked =
-          counts.skipped_blocked || counts.skipped_non_personal || 0;
-        const parts = [`Added ${queued} user${queued === 1 ? '' : 's'} to the queue.`];
-        if (skippedBlocked > 0) {
-          parts.push(
-            `${skippedBlocked} blocked company address${
-              skippedBlocked === 1 ? '' : 'es'
-            } skipped.`
-          );
-        }
-        toast.success(parts.join(' '));
-        setSelectedIds(new Set());
-        refreshOverview();
-        fetchUsers();
-      })
-      .catch((err) => {
-        const message = `Unable to add to queue: ${err.message}`;
         setError(message);
         toast.error(message);
       })
@@ -663,13 +439,6 @@ export function useDashboardState() {
         setUsers((list) =>
           list.map((row) => (row.id === user.id ? { ...row, ...saved } : row))
         );
-        setQueueItems((list) =>
-          list.map((row) =>
-            row.user_id === user.id
-              ? { ...row, display_name: saved.display_name ?? row.display_name }
-              : row
-          )
-        );
         handleCancelDisplayName(user.id);
       })
       .catch((err) => {
@@ -708,25 +477,13 @@ export function useDashboardState() {
         const place = data.location || next || 'this place';
         if (action === 'delete') {
           toast.success(`Deleted ${name}. ${place} is excluded.`);
-          setSelectedIds((current) => {
-            const nextIds = new Set(current);
-            nextIds.delete(user.id);
-            return nextIds;
-          });
           loadCountries();
-          refreshOverview();
           fetchUsers({ silent: true });
           return;
         }
         if (action === 'suppress') {
           toast.success(`Suppressed ${name}. ${place} is a suppressed location.`);
-          setSelectedIds((current) => {
-            const nextIds = new Set(current);
-            nextIds.delete(user.id);
-            return nextIds;
-          });
           loadCountries();
-          refreshOverview();
           fetchUsers({ silent: true });
           return;
         }
@@ -734,11 +491,6 @@ export function useDashboardState() {
         const leftCountry =
           selectedCountry && saved.country && saved.country !== selectedCountry;
         if (leftCountry) {
-          setSelectedIds((current) => {
-            const nextIds = new Set(current);
-            nextIds.delete(user.id);
-            return nextIds;
-          });
           loadCountries();
           fetchUsers({ silent: true });
           return;
@@ -759,6 +511,8 @@ export function useDashboardState() {
   };
 
   const openEmailContact = (user) => {
+    const seq = mailPreviewSeq.current + 1;
+    mailPreviewSeq.current = seq;
     setContactModal({
       channel: 'email',
       user,
@@ -766,19 +520,40 @@ export function useDashboardState() {
       subject: '',
       body: '',
       filename: '',
+      templates: [],
       senders: [],
       sender: '',
     });
-    fetch(`/api/users/${user.id}/mail-preview`)
-      .then(async (res) => {
+    Promise.all([
+      fetch(`/api/users/${user.id}/mail-preview`).then(async (res) => {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
           const detail = body.detail;
           throw new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`);
         }
         return body;
-      })
-      .then((data) => {
+      }),
+      fetch('/api/templates').then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) return { templates: [] };
+        return body;
+      }),
+      mailAccounts
+        ? Promise.resolve(mailAccounts)
+        : fetch('/api/mail-accounts')
+            .then(async (res) => {
+              const body = await res.json().catch(() => ({}));
+              if (!res.ok) return null;
+              return body;
+            })
+            .catch(() => null),
+    ])
+      .then(([data, templateData, accountsData]) => {
+        if (seq !== mailPreviewSeq.current) return;
+        const listed = templateData.templates || [];
+        const previewTemplates = data.templates || [];
+        const templates = listed.length ? listed : previewTemplates;
+        const accounts = accountsData?.accounts || mailAccounts?.accounts || [];
         setContactModal((current) =>
           current && current.user.id === user.id
             ? {
@@ -786,14 +561,17 @@ export function useDashboardState() {
                 loading: false,
                 subject: data.subject || '',
                 body: data.body || '',
-                filename: data.filename || '',
+                filename: data.filename || templates[0]?.filename || '',
+                templates,
                 senders: data.senders || [],
                 sender: data.sender || (data.senders || [])[0] || '',
+                senderAccounts: accounts,
               }
             : current
         );
       })
       .catch((err) => {
+        if (seq !== mailPreviewSeq.current) return;
         toast.error(`Unable to render the mail: ${err.message}`);
         setContactModal(null);
       });
@@ -803,14 +581,38 @@ export function useDashboardState() {
     setContactModal({ channel: 'social', user, link, loading: false });
   };
 
-  const reloadMailPreview = (sender) => {
+  const reloadMailPreview = ({ sender, template } = {}) => {
+    const currentModal = contactModal;
+    if (!currentModal || currentModal.channel !== 'email' || !currentModal.user?.id) return;
+    const nextSender = sender ?? currentModal.sender ?? '';
+    const nextTemplate = template ?? currentModal.filename ?? '';
+    const chosen = (currentModal.templates || []).find((item) => item.filename === nextTemplate);
+    if (chosen && chosen.subject != null) {
+      const person = currentModal.user.display_name || currentModal.user.name || '';
+      const yourName = senderDisplayName(nextSender, currentModal.senderAccounts);
+      const link = currentModal.user.link || '';
+      setContactModal((current) => {
+        if (!current || current.channel !== 'email') return current;
+        return {
+          ...current,
+          sender: nextSender,
+          filename: chosen.filename,
+          subject: renderTemplateText(chosen.subject, person, yourName, link),
+          body: renderTemplateText(chosen.body, person, yourName, link),
+        };
+      });
+      return;
+    }
+    const seq = mailPreviewSeq.current + 1;
+    mailPreviewSeq.current = seq;
     setContactModal((current) => {
       if (!current || current.channel !== 'email') return current;
-      return { ...current, sender, loading: true };
+      return { ...current, sender: nextSender, filename: nextTemplate };
     });
-    const userId = contactModal?.user?.id;
-    if (!userId) return;
-    fetch(`/api/users/${userId}/mail-preview?sender=${encodeURIComponent(sender)}`)
+    const params = new URLSearchParams();
+    if (nextSender) params.set('sender', nextSender);
+    if (nextTemplate) params.set('template', nextTemplate);
+    fetch(`/api/users/${currentModal.user.id}/mail-preview?${params.toString()}`)
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -820,6 +622,7 @@ export function useDashboardState() {
         return body;
       })
       .then((data) => {
+        if (seq !== mailPreviewSeq.current) return;
         setContactModal((current) =>
           current && current.channel === 'email'
             ? {
@@ -827,13 +630,15 @@ export function useDashboardState() {
                 loading: false,
                 subject: data.subject || '',
                 body: data.body || '',
-                filename: data.filename || '',
-                sender: data.sender || sender,
+                filename: data.filename || nextTemplate,
+                templates: data.templates || current.templates || [],
+                sender: data.sender || nextSender,
               }
             : current
         );
       })
       .catch((err) => {
+        if (seq !== mailPreviewSeq.current) return;
         toast.error(`Unable to render the mail: ${err.message}`);
         setContactModal((current) => (current ? { ...current, loading: false } : current));
       });
@@ -854,6 +659,7 @@ export function useDashboardState() {
         channel,
         status,
         sender_email: channel === 'email' && status === 'sent' ? sender : '',
+        template: channel === 'email' ? contactModal.filename || '' : '',
         url: channel === 'social' ? contactModal.link?.url || '' : '',
       }),
     })
@@ -979,11 +785,6 @@ export function useDashboardState() {
       })
       .then(() => {
         toast.success(`Suppressed ${name}.`);
-        setSelectedIds((current) => {
-          const next = new Set(current);
-          next.delete(user.id);
-          return next;
-        });
         loadCountries();
         fetchUsers({ silent: true });
       })
@@ -1191,12 +992,9 @@ export function useDashboardState() {
           setSelectedCountry('');
           setUsers([]);
           setTotal(0);
-          setSelectedIds(new Set());
           setPage(1);
         }
         loadCountries();
-        refreshOverview();
-        loadQueueItems();
         if (selectedCountry !== slug) {
           fetchUsers({ silent: true });
         }
@@ -1267,28 +1065,12 @@ export function useDashboardState() {
     setLoading,
     error,
     setError,
-    overview,
-    setOverview,
     mailAccounts,
     setMailAccounts,
-    queueItems,
-    setQueueItems,
-    queuePage,
-    setQueuePage,
-    queueTotal,
-    setQueueTotal,
-    selectedIds,
-    setSelectedIds,
-    selectedQueueIds,
-    setSelectedQueueIds,
     mailEmail,
     setMailEmail,
     mailSenderName,
     setMailSenderName,
-    mailAppPassword,
-    setMailAppPassword,
-    mailActive,
-    setMailActive,
     mailSaveMode,
     setMailSaveMode,
     mailModalOpen,
@@ -1331,33 +1113,19 @@ export function useDashboardState() {
     setTemplateSubject,
     templateBody,
     setTemplateBody,
-    refreshOverview,
     loadMailAccounts,
-    loadQueueItems,
     applyScraperInfo,
     loadScraperInfo,
     loadTemplates,
     loadCountries,
     selectedSocials,
     fetchUsers,
-    queueCount,
     searchQuery,
     isGlobalSearch,
     showUserTable,
-    canAddToQueue,
     pageCount,
-    queuePageCount,
-    queueFrom,
-    queueTo,
-    pageUserIds,
-    selectedOnPageCount,
-    allPageSelected,
-    somePageSelected,
     mailAccountsData,
     accounts,
-    totalSent,
-    sentToday,
-    dailyLimit,
     sortedCountries,
     sidebarCountries,
     sidebarTotal,
@@ -1380,19 +1148,8 @@ export function useDashboardState() {
     openCreateMailModal,
     openEditMailModal,
     closeMailModal,
-    handleToggleSelect,
-    handleToggleSelectPage,
-    removableQueueItems,
-    removableQueueIds,
-    allQueueSelected,
-    someQueueSelected,
-    canRemoveFromQueue,
-    handleToggleQueueSelect,
-    handleToggleSelectQueuePage,
-    handleRemoveFromQueue,
     handleAddMailAccount,
     handleDeleteMailAccount,
-    handleAddToQueue,
     displayNameValue,
     handleDisplayNameChange,
     handleCancelDisplayName,

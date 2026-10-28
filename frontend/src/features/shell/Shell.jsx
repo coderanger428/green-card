@@ -4,7 +4,6 @@ import { PoolView } from '../pool/PoolView';
 import { ScraperView } from '../scraper/ScraperView';
 import { SettingsView } from '../settings/SettingsView';
 import { TemplatesView } from '../templates/TemplatesView';
-import { QueueView } from '../queue/QueueView';
 import { ContactModal } from '../pool/ContactModal';
 import { useDashboard } from '../../app/DashboardContext';
 import { cls } from '../../styles/cls';
@@ -22,7 +21,6 @@ export function Shell() {
     view,
     setView,
     setPage,
-    setSelectedIds,
   } = useDashboard();
   return (
     <div className={cls(shell, 'app-shell')}>
@@ -71,7 +69,6 @@ export function Shell() {
                 onClick={() => {
                   if (id !== view && id === 'pool') {
                     setPage(1);
-                    setSelectedIds(new Set());
                   }
                   setView(id);
                 }}
@@ -89,7 +86,6 @@ export function Shell() {
         <ScraperView />
         <TemplatesView />
         <SettingsView />
-        <QueueView />
         <ContactModal />
         <button
           type="button"

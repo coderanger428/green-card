@@ -28,7 +28,6 @@ export function PoolView() {
     setPage,
     loading,
     error,
-    setSelectedIds,
     savingDisplayNameIds,
     editingDisplayNameId,
     setEditingDisplayNameId,
@@ -69,7 +68,6 @@ export function PoolView() {
                   onClick={() => {
                     setSelectedCountry('');
                     setPage(1);
-                    setSelectedIds(new Set());
                   }}
                 >
                   <div className={cls(layout, "country-list-top")}>
@@ -103,7 +101,6 @@ export function PoolView() {
                           onClick={() => {
                             setSelectedCountry(country.country);
                             setPage(1);
-                            setSelectedIds(new Set());
                           }}
                         >
                           <div className={cls(layout, "country-list-top")}>

@@ -58,10 +58,6 @@ class SuppressUserTests(unittest.TestCase):
             stats = {row["country"]: row for row in db.country_stats(conn)}
             self.assertEqual(stats["japan"]["count"], 1)
             self.assertEqual(stats["japan"]["sent"], 1)
-
-            counts = db.enqueue_users(conn, [pending_id])
-            self.assertEqual(counts["queued"], 0)
-            self.assertEqual(counts["skipped_suppressed"], 1)
         finally:
             conn.close()
 

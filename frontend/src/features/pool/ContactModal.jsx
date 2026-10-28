@@ -59,23 +59,42 @@ export function ContactModal() {
                   <p>Rendering the template…</p>
                 ) : (
                   <>
-                    <label>
-                      Sender
-                      <select
-                        value={contactModal.sender || ''}
-                        onChange={(event) => reloadMailPreview(event.target.value)}
-                      >
-                        {(contactModal.senders || []).length === 0 ? (
-                          <option value="">Add a sender in Settings</option>
-                        ) : (
-                          contactModal.senders.map((email) => (
-                            <option key={email} value={email}>
-                              {email}
-                            </option>
-                          ))
-                        )}
-                      </select>
-                    </label>
+                    <div className={cls(modal, "mail-field-row")}>
+                      <label>
+                        Sender
+                        <select
+                          value={contactModal.sender || ''}
+                          onChange={(event) => reloadMailPreview({ sender: event.target.value })}
+                        >
+                          {(contactModal.senders || []).length === 0 ? (
+                            <option value="">Add a sender in Settings</option>
+                          ) : (
+                            contactModal.senders.map((email) => (
+                              <option key={email} value={email}>
+                                {email}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        Template
+                        <select
+                          value={contactModal.filename || ''}
+                          onChange={(event) => reloadMailPreview({ template: event.target.value })}
+                        >
+                          {(contactModal.templates || []).length === 0 ? (
+                            <option value="">No templates</option>
+                          ) : (
+                            contactModal.templates.map((item) => (
+                              <option key={item.filename} value={item.filename}>
+                                {item.filename}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </label>
+                    </div>
                     <label>
                       To
                       <span className={cls(modal, "copy-row")}>
@@ -88,7 +107,15 @@ export function ContactModal() {
                     <label>
                       Subject
                       <span className={cls(modal, "copy-row")}>
-                        <input type="text" readOnly value={contactModal.subject || ''} />
+                        <input
+                          type="text"
+                          value={contactModal.subject || ''}
+                          onChange={(event) =>
+                            setContactModal((current) =>
+                              current ? { ...current, subject: event.target.value } : current
+                            )
+                          }
+                        />
                         <button type="button" className={`${cls(ui, "secondary-button")} ${cls(modal, "copy-button")}`} aria-label="Copy subject" onClick={() => copyText(contactModal.subject)}>
                           <IconCopy />
                         </button>
@@ -97,7 +124,15 @@ export function ContactModal() {
                     <label>
                       Body
                       <span className={cls(modal, "copy-row copy-row-body")}>
-                        <textarea readOnly rows={10} value={contactModal.body || ''} />
+                        <textarea
+                          rows={10}
+                          value={contactModal.body || ''}
+                          onChange={(event) =>
+                            setContactModal((current) =>
+                              current ? { ...current, body: event.target.value } : current
+                            )
+                          }
+                        />
                         <button type="button" className={`${cls(ui, "secondary-button")} ${cls(modal, "copy-button")}`} aria-label="Copy body" onClick={() => copyText(contactModal.body)}>
                           <IconCopy />
                         </button>

@@ -53,35 +53,6 @@ class SenderEmailColumnTests(unittest.TestCase):
         self.assertEqual(rows[1], "old@gmail.com")
         self.assertEqual(rows[2], "")
 
-    def test_mark_sent_stores_sender_on_the_user(self):
-        now = "2026-10-27T00:00:00+09:00"
-        self.conn.execute(
-            """
-            INSERT INTO users (
-                id, email, name, link, location, country, mail_status,
-                created_at, updated_at
-            ) VALUES (3, 'c@gmail.com', '', '', '', 'usa', 'queued', ?, ?)
-            """,
-            (now, now),
-        )
-        db.ensure_sender_email_column(self.conn)
-        self.conn.execute(
-            """
-            INSERT INTO queue_items (user_id, status, queued_at, sender_email)
-            VALUES (3, 'sending', ?, 'from@gmail.com')
-            """,
-            (now,),
-        )
-        queue_id = self.conn.execute(
-            "SELECT id FROM queue_items WHERE user_id = 3"
-        ).fetchone()["id"]
-        db.mark_queue_sent(self.conn, queue_id, 3, "usa (1).txt", "Hello")
-        row = self.conn.execute(
-            "SELECT mail_status, sender_email FROM users WHERE id = 3"
-        ).fetchone()
-        self.assertEqual(row["mail_status"], "sent")
-        self.assertEqual(row["sender_email"], "from@gmail.com")
-
 
 if __name__ == "__main__":
     unittest.main()

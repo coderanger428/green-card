@@ -57,6 +57,24 @@ class PickMessageTests(unittest.TestCase):
         filename, _, _ = pick_message(pool, "japan", "Taro", "Me", "")
         self.assertEqual(filename, "etc (1).txt")
 
+    def test_first_filename_wins_when_several_match(self):
+        pool = [
+            {"filename": "usa (2).txt", "region": "usa", "subject": "Second", "body": "b"},
+            {"filename": "usa (1).txt", "region": "usa", "subject": "First [Name]", "body": "a"},
+        ]
+        filename, subject, body = pick_message(pool, "usa", "Jane", "Me", "")
+        self.assertEqual(filename, "usa (1).txt")
+        self.assertEqual(subject, "First Jane")
+        self.assertEqual(body, "a")
+
+    def test_named_template_overrides_the_location_match(self):
+        filename, subject, body = pick_message(
+            POOL, "usa", "Jane", "Me", "", filename="ja (1).txt"
+        )
+        self.assertEqual(filename, "ja (1).txt")
+        self.assertIn("Jane", subject)
+        self.assertEqual(body, "ja")
+
 
 if __name__ == "__main__":
     unittest.main()
